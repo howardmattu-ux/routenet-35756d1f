@@ -478,7 +478,7 @@ export function GlobalAudioPlayer() {
       (outgoing as any).__tailWired = true;
       const done = () => {
         try { outgoing.pause(); outgoing.removeAttribute("src"); outgoing.load(); } catch {}
-        if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
+        if (prevAudioRef.current === outgoing) { prevAudioRef.current = null; clearTail(); }
       };
       outgoing.addEventListener("ended", done, { once: true });
       outgoing.addEventListener("error", done, { once: true });
@@ -503,7 +503,7 @@ export function GlobalAudioPlayer() {
         if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
       }
     }, CROSSFADE_FADE_INTERVAL_MS);
-  }, [stopPrevAudio]);
+  }, [stopPrevAudio, clearTail]);
 
   /**
    * Wire one piped deck: queue advance on natural end, iframe failover on
@@ -816,7 +816,7 @@ export function GlobalAudioPlayer() {
     if (track && deckHandoffTrackRef.current === track.id) {
       deckHandoffTrackRef.current = null;
       handoffRef.current = false;
-      setIsSearching(false);
+      // Loading clears once the incoming deck actually starts playing.
       return;
     }
     deckHandoffTrackRef.current = null;
@@ -1001,30 +1001,52 @@ export function GlobalAudioPlayer() {
     pendingFadeInRef.current = true;
     deckHandoffTrackRef.current = p.trackId;
 
-    // Outgoing song keeps playing on its own deck / audio element.
-    if (audioRef.current && usePipedAudio) {
+    // Outgoing song keeps playing on its own deck / audio element — never stopped.
+    const outgoingIsAudio = !!(audioRef.current && usePipedAudio);
+    if (outgoingIsAudio) {
       beginPrevFadeOut();
-      setUsePipedAudio(false);
+      startPrevFade(); // wires "stop when it naturally ends", full volume
+      const t = { id: "", deck: activeDeckRef.current };
+      tailRef.current = t;
+      setTail(t);
     } else if (showPlayer && youtubeIdRef.current) {
       const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
       tailRef.current = t;
       setTail(t);
     }
-    try { deckRefs[p.deck].current?.setVolume?.(FADING_DISABLED ? getGlobalVolume() : 0); } catch {}
     preloadRef.current = null;
     setPreload(null);
     activeDeckRef.current = p.deck;
     setActiveDeck(p.deck);
     resumeAtRef.current = 0;
-    setYoutubeId(p.id);
-    setShowPlayer(true);
+    // Incoming deck shows its own loading state until it's actually playing.
+    setIsSearching(true);
+    if (p.audio) {
+      // Start the pre-warmed audio for the next deck in parallel.
+      const a = p.audio;
+      a.volume = getGlobalVolume();
+      audioRef.current = a;
+      activeTrackIdRef.current = p.trackId;
+      wirePipedDeckAudio(a, p.id, nextTrack);
+      a.addEventListener("playing", () => setIsSearching(false), { once: true });
+      a.play().then(() => setIsSearching(false)).catch(() => {});
+      setUsePipedAudio(true);
+      setYoutubeId(null);
+      setShowPlayer(false);
+    } else {
+      if (outgoingIsAudio) setUsePipedAudio(false);
+      try { deckRefs[p.deck].current?.setVolume?.(getGlobalVolume()); } catch {}
+      setYoutubeId(p.id);
+      setShowPlayer(true);
+    }
     next();
-  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut]);
+  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut, startPrevFade, wirePipedDeckAudio]);
   triggerCrossfadeRef.current = triggerCrossfade;
 
   const handleProgress = useCallback(
     (currentTime: number, duration: number) => {
       setProgress(currentTime, duration);
+      if (currentTime > 0) setIsSearching(false);
       if (
         isAutoMixEnabled() &&
         duration > (xfMs() / 1000) + 1 &&
@@ -1061,6 +1083,17 @@ export function GlobalAudioPlayer() {
 
   useEffect(() => {
     (window as any).__globalAudioPlayerRef = playerRef;
+    // Live time/length of the playing deck and the finishing (previous) deck.
+    (window as any).__deckTimes = () => {
+      const a = audioRef.current;
+      const live = a ? { t: a.currentTime || 0, d: a.duration || 0 }
+        : { t: playerRef.current?.getCurrentTime() || 0, d: playerRef.current?.getDuration() || 0 };
+      const pa = prevAudioRef.current;
+      const td = tailRef.current ? deckRefs[tailRef.current.deck].current : null;
+      const tail = pa ? { t: pa.currentTime || 0, d: pa.duration || 0 }
+        : td ? { t: td.getCurrentTime() || 0, d: td.getDuration() || 0 } : null;
+      return { live, tail };
+    };
     (window as any).__globalAudioRef = audioRef;
     (window as any).__isUsingPipedAudio = () => usePipedAudio;
     return () => {
