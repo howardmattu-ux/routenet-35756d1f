@@ -156,8 +156,8 @@ function Row({
       {Icon && (
         <div
           className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
-            destructive ? "bg-destructive/15 text-destructive" : "bg-primary/12 text-primary",
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+            destructive ? "bg-destructive/15 text-destructive" : "bg-secondary text-foreground",
           )}
         >
           <Icon className="h-4.5 w-4.5" />
@@ -180,7 +180,7 @@ function Group({ title, children }: { title?: string; children: React.ReactNode 
           {title}
         </p>
       )}
-      <PremiumCard className="divide-y divide-border/40 !p-0">{children}</PremiumCard>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-xl bg-card">{children}</div>
     </div>
   );
 }
@@ -224,8 +224,7 @@ export default function Settings() {
   return (
     <main className="min-h-screen bg-background pb-32">
       <div className="relative">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-[radial-gradient(circle_at_50%_0%,hsl(var(--primary)/0.25),transparent_60%)]" />
-
+        
         <header className="relative z-10 flex items-center justify-between px-5 pt-10">
           <button
             onClick={() => (subPage ? back() : navigate(-1))}
@@ -246,14 +245,14 @@ export default function Settings() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: subPage ? -20 : 20 }}
             transition={{ duration: 0.25 }}
-            className="relative z-10 mx-auto max-w-lg px-5 pt-6"
+            className="relative z-10 mx-auto max-w-2xl px-5 pt-6"
           >
             {subPage === null && (
               <div className="space-y-6">
                 {/* Profile header */}
-                <PremiumCard className="p-5">
+                <div className="rounded-xl bg-card p-5">
                   <div className="flex items-center gap-4">
-                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary-glow text-lg font-black text-primary-foreground">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary text-lg font-black text-primary-foreground">
                       {initials}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -271,7 +270,7 @@ export default function Settings() {
                       {user ? "View" : "Sign in"}
                     </button>
                   </div>
-                </PremiumCard>
+                </div>
 
                 <Group>
                   <Row icon={User} label="Account" desc="Profile, subscription, security" onClick={() => setSubPage("account")} />
@@ -285,9 +284,11 @@ export default function Settings() {
                 </Group>
 
                 {user && (
-                  <Group>
-                    <Row icon={LogOut} label="Sign out" onClick={handleLogout} destructive />
-                  </Group>
+                  <div className="flex justify-center pt-2">
+                    <button onClick={handleLogout} className="flex items-center gap-2 rounded-full border border-muted-foreground/40 px-8 py-3 text-sm font-bold text-foreground transition-transform hover:scale-105 hover:border-foreground">
+                      <LogOut className="h-4 w-4" /> Log out
+                    </button>
+                  </div>
                 )}
                 <p className="pt-2 text-center text-[11px] font-medium text-muted-foreground">
                   Routenet · v2.0

@@ -41,15 +41,15 @@ export function QuickAccessGrid() {
   if (recentSongs.length === 0) return null;
 
   return (
-    <section className="mb-6 grid grid-cols-2 gap-2 2xl:grid-cols-4 lg:gap-x-3 lg:gap-y-2 lg:[&>*:nth-child(n+7)]:hidden 2xl:[&>*:nth-child(n+7)]:flex">
+    <section className="mb-6 grid grid-cols-2 gap-2 lg:grid-cols-4 lg:gap-x-3 lg:gap-y-2">
       {recentSongs.map((t) => (
         <Button
           variant="ghost"
           key={t.id}
           onClick={() => playTrack(t, recentSongs)}
-          className="group flex h-[42px] min-w-0 justify-start gap-2.5 overflow-hidden rounded-[4px] bg-foreground/10 p-0 pr-2 text-left transition-colors hover:bg-foreground/20 lg:h-[48px] lg:gap-3"
+          className="group flex h-[42px] min-w-0 justify-start gap-2.5 overflow-hidden rounded-[4px] bg-foreground/10 p-0 pr-2 lg:h-[56px] text-left transition-colors hover:bg-foreground/20 lg:h-[48px] lg:gap-3"
         >
-          <img src={t.artwork || "/placeholder.svg"} alt="" loading="lazy" className="h-full w-[42px] shrink-0 object-cover lg:w-[48px]" />
+          <img src={t.artwork || "/placeholder.svg"} alt="" loading="lazy" className="h-full w-[42px] shrink-0 object-cover lg:w-[56px]" />
           <span className="line-clamp-2 min-w-0 flex-1 whitespace-normal text-[13px] font-bold leading-tight text-foreground lg:text-sm">{t.title}</span>
           <span className="flex h-8 w-8 shrink-0 items-center justify-center mr-1 rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
             <Play className="ml-0.5 h-3.5 w-3.5" fill="currentColor" />

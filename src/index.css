@@ -182,3 +182,10 @@ html[data-cards="classic"] .rn-card > div:first-child { border-radius: 1rem; box
 
 /* Spotify card mode on every screen size */
 html[data-cards="spotify"] .rn-card { background: hsl(var(--card) / 0.6); padding: 0.5rem; border-radius: 0.5rem; }
+
+/* Spotify-style slim range: grey track, white fill, green on hover */
+.spotify-range { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 9999px; background: hsl(var(--muted-foreground) / 0.35); cursor: pointer; accent-color: hsl(var(--foreground)); }
+.spotify-range:hover { accent-color: hsl(var(--primary)); }
+.spotify-range::-webkit-slider-thumb { -webkit-appearance: none; height: 12px; width: 12px; border-radius: 9999px; background: hsl(var(--foreground)); opacity: 0; transition: opacity .15s; }
+.spotify-range:hover::-webkit-slider-thumb { opacity: 1; }
+.spotify-range::-moz-range-thumb { height: 12px; width: 12px; border: 0; border-radius: 9999px; background: hsl(var(--foreground)); }
