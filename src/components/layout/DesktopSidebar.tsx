@@ -49,9 +49,9 @@ export function DesktopSidebar() {
             <Plus className="h-4 w-4" />
           </Button>
         </div>
-        <div className="mb-3 flex gap-2 px-2">
-          {[{ l: "Playlists", p: "/library" }, { l: "By you", p: "/recently-played" }].map((c, i) => (
-            <button key={c.l} onClick={() => navigate(c.p)} className={cn("rounded-full px-3 py-1.5 text-[13px] font-semibold transition-colors", i === 0 ? "bg-foreground text-background" : "bg-secondary text-foreground hover:bg-muted")}>{c.l}</button>
+        <div className="mb-3 flex flex-wrap gap-2 px-2">
+          {[{ l: "Playlists", p: "/library" }, { l: "Artists", p: "/library" }, { l: "Albums", p: "/library" }, { l: "Podcasts & Shows", p: "/library" }].map((c, i) => (
+            <button key={c.l} onClick={() => navigate(c.p)} className={cn("rounded-full px-3 py-1.5 text-[13px] font-semibold transition-colors", "bg-secondary text-foreground hover:bg-muted")}>{c.l}</button>
           ))}
         </div>
         <div className="mb-2 flex items-center justify-between px-2 text-muted-foreground">
@@ -61,7 +61,7 @@ export function DesktopSidebar() {
         <button onClick={() => navigate("/liked")} className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60">
           {liked[0]?.artwork
             ? <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded"><img src={liked[0].artwork} alt="" className="h-full w-full object-cover" /><span className="absolute bottom-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary"><Heart className="h-2.5 w-2.5 text-primary-foreground" fill="currentColor" /></span></span>
-            : <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-gradient-to-br from-accent to-primary"><Heart className="h-5 w-5 text-primary-foreground" fill="currentColor" /></span>}
+            : <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-gradient-to-br from-[hsl(255_80%_45%)] to-[hsl(200_60%_75%)]"><Heart className="h-5 w-5 text-foreground" fill="currentColor" /></span>}
           <span className="min-w-0">
             <span className="block truncate text-[15px] font-semibold text-sidebar-foreground">Liked Songs</span>
             <span className="block text-[13px] text-muted-foreground">Playlist • {liked.length} songs</span>
