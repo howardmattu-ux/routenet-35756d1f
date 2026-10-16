@@ -355,6 +355,9 @@ export function GlobalAudioPlayer() {
   // Handle track end — called from both iframe and piped
   const handleTrackEnd = useCallback(() => {
     if (hasEndedRef.current) return; // Prevent double-fire
+    // Crossfade: the next player already started at the 15s mark, so a song
+    // finishing must never advance, switch or stop anything — it just goes idle.
+    if (isAutoMixEnabled() && crossfadeTriggeredRef.current && repeat !== "one") return;
     hasEndedRef.current = true;
 
     // Only fire DJ event if DJ is enabled (avoids interference with normal playback)
