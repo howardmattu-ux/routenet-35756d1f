@@ -1,6 +1,7 @@
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { useCrossfade } from "@/lib/crossfadePrefs";
+import { DeckPlayers } from "@/components/player/DeckPlayers";
 
 /** Crossfade on/off, length (1–15s) and tempo sync — shared by Settings and EQ. */
 export function CrossfadeControls() {
@@ -18,6 +19,7 @@ export function CrossfadeControls() {
         <div className="mb-2 flex justify-between text-xs text-muted-foreground"><span>1s</span><span>{xf.seconds}s</span><span>15s</span></div>
         <Slider value={[xf.seconds]} min={1} max={15} step={1} onValueChange={([v]) => setXf({ seconds: v })} />
       </div>
+      <DeckPlayers />
     </div>
   );
 }
