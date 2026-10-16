@@ -14,21 +14,21 @@
     --background-card: 0 0% 11%;
     --foreground: 0 0% 100%;
 
-    --card: 0 0% 9%;
+    --card: 0 0% 9.4%;
     --card-foreground: 0 0% 100%;
 
     --popover: 0 0% 16%;
     --popover-foreground: 0 0% 100%;
 
     /* Primary — Routenet red */
-    --primary: 357 82% 54%;
-    --primary-foreground: 0 0% 100%;
-    --primary-glow: 357 88% 62%;
+    --primary: 141 73% 42%;
+    --primary-foreground: 0 0% 0%;
+    --primary-glow: 141 76% 52%;
 
-    --accent: 357 82% 54%;
+    --accent: 141 73% 42%;
     --accent-foreground: 0 0% 100%;
 
-    --secondary: 0 0% 12%;
+    --secondary: 0 0% 16%;
     --secondary-foreground: 0 0% 100%;
 
     --muted: 0 0% 16%;
@@ -39,27 +39,27 @@
 
     --border: 0 0% 16%;
     --input: 0 0% 16%;
-    --ring: 0 84% 55%;
+    --ring: 141 73% 42%;
 
     --radius: 0.5rem;
 
     --gradient-bg: linear-gradient(180deg, hsl(0 0% 0%) 0%, hsl(0 0% 0%) 100%);
     --gradient-card: linear-gradient(160deg, hsl(0 0% 11%) 0%, hsl(0 0% 9%) 100%);
-    --gradient-primary: linear-gradient(135deg, hsl(0 84% 50%) 0%, hsl(0 88% 62%) 100%);
+    --gradient-primary: linear-gradient(135deg, hsl(141 73% 42%) 0%, hsl(141 76% 52%) 100%);
     --gradient-hero: linear-gradient(180deg, hsl(0 0% 18% / 0.5) 0%, hsl(0 0% 7%) 78%);
 
-    --shadow-glow: 0 4px 20px hsl(0 65% 25% / 0.35);
+    --shadow-glow: 0 4px 20px hsl(141 60% 25% / 0.35);
     --shadow-card: 0 8px 24px hsl(0 0% 0% / 0.5);
     --shadow-elevated: 0 16px 40px hsl(0 0% 0% / 0.6);
 
     --sidebar-background: 0 0% 7%;
     --sidebar-foreground: 0 0% 90%;
-    --sidebar-primary: 0 84% 55%;
+    --sidebar-primary: 141 73% 42%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 12%;
+    --sidebar-accent: 0 0% 16%;
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 0 0% 16%;
-    --sidebar-ring: 0 84% 55%;
+    --sidebar-ring: 141 73% 42%;
   }
 
 

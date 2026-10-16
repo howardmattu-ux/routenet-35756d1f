@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Home, Search, X, FolderOpen, Bell, Users, Radio, ArrowDownCircle, ArrowUp, ArrowDown, PlusCircle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { MoreHorizontal } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AppLogo } from "@/components/brand/AppLogo";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebouncedSearch, useSearchMusic, useUnifiedTrackSearch } from "@/hooks/useMusicSearch";
@@ -79,8 +81,19 @@ export function DesktopTopBar() {
 
   return (
     <header className="hidden h-16 shrink-0 items-center gap-2 bg-background px-4 lg:flex">
-      <AppLogo className="h-9 w-9 rounded-full" />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button aria-label="Menu" className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground"><MoreHorizontal className="h-5 w-5" /></button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuItem onClick={() => navigate("/library")}>Your Library</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/browse")}>Browse</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/queue")}>Queue</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/settings")}>Settings</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <div className="flex flex-1 items-center justify-center gap-2">
+        <AppLogo className="h-12 w-12 shrink-0 rounded-full" />
         <button
           onClick={() => navigate("/home")}
           aria-label="Home"
@@ -155,9 +168,6 @@ export function DesktopTopBar() {
           <Radio className="h-5 w-5" />
         </button>
       </div>
-      <button onClick={() => navigate("/premium")} className="hidden h-8 rounded-full bg-foreground px-4 text-sm font-bold text-background transition-transform hover:scale-105 xl:block">
-        Explore Premium
-      </button>
       <button onClick={() => navigate("/settings")} className="hidden items-center gap-1.5 px-2 text-sm font-bold text-muted-foreground hover:text-foreground xl:flex">
         <ArrowDownCircle className="h-4 w-4" /> Install App
       </button>
