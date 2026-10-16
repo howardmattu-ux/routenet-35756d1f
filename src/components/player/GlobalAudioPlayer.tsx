@@ -30,8 +30,11 @@ const youtubeIdCache = new Map<string, string>();
 const CROSSFADE_FADE_INTERVAL_MS = 100;
 // Volume fading in/out caused songs to freeze — kept off.
 const FADING_DISABLED = true;
-function xfMs() { return getCrossfade().seconds * 1000; }
-function isAutoMixEnabled(): boolean { return getCrossfade().enabled; }
+// Four-deck rule: the next deck always starts exactly 15s before the current
+// song ends. Songs of 16s or less simply play out and hand over on end.
+const DECK_OVERLAP_SECONDS = 15;
+function xfMs() { return DECK_OVERLAP_SECONDS * 1000; }
+function isAutoMixEnabled(): boolean { void getCrossfade; return true; }
 // Equal-power curves so the overlap sounds smooth (no volume dip mid-fade).
 const fadeOutCurve = (t: number) => Math.cos(t * Math.PI / 2);
 const fadeInCurve = (t: number) => Math.sin(t * Math.PI / 2);
@@ -1041,7 +1044,8 @@ export function GlobalAudioPlayer() {
 
   const handlePlayerError = useCallback(() => {
     iframeFailCountRef.current++;
-    if (iframeFailCountRef.current > 2 && currentTrack && youtubeId) {
+    // YouTube reports blocked videos only once, so react on the first error.
+    if (iframeFailCountRef.current === 1 && currentTrack && youtubeId) {
       console.warn("[Player] Iframe failed, trying Piped fallback...");
       tryPlayWithPiped(youtubeId, currentTrack).then(pipedOk => {
         if (pipedOk) {

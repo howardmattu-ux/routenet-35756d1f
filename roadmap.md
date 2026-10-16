@@ -24,3 +24,6 @@
 
 - [x] Remove tempo sync (caused freeze at 13s after crossfade)
 - [x] Stop auto-skipping slow-loading songs
+
+- [x] Four-deck playback: next deck starts 15s before current song ends, no fades
+- [ ] Profile page Spotify-style polish
