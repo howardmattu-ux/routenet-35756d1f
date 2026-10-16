@@ -503,7 +503,7 @@ export function GlobalAudioPlayer() {
         if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
       }
     }, CROSSFADE_FADE_INTERVAL_MS);
-  }, [stopPrevAudio]);
+  }, [stopPrevAudio, clearTail]);
 
   /**
    * Wire one piped deck: queue advance on natural end, iframe failover on
@@ -1006,6 +1006,9 @@ export function GlobalAudioPlayer() {
     if (outgoingIsAudio) {
       beginPrevFadeOut();
       startPrevFade(); // wires "stop when it naturally ends", full volume
+      const t = { id: "", deck: activeDeckRef.current };
+      tailRef.current = t;
+      setTail(t);
     } else if (showPlayer && youtubeIdRef.current) {
       const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
       tailRef.current = t;
