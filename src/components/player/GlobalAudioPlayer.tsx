@@ -919,6 +919,7 @@ export function GlobalAudioPlayer() {
     setShowPlayer(true);
     next();
   }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut]);
+  triggerCrossfadeRef.current = triggerCrossfade;
 
   const handleProgress = useCallback(
     (currentTime: number, duration: number) => {
