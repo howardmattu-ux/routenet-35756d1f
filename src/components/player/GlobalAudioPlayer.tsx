@@ -544,16 +544,7 @@ export function GlobalAudioPlayer() {
               !crossfadeTriggeredRef.current &&
               !hasEndedRef.current
             ) {
-              // Inline crossfade trigger (avoids stale closure on usePipedAudio)
-              if ((window as any).__djEnabled !== true && repeat !== "one") {
-                crossfadeTriggeredRef.current = true;
-                pendingFadeInRef.current = true;
-                // Move outgoing audio aside so the next track can attach
-                // without truncating the current song. The element keeps
-                // playing while fading out over the crossfade window.
-                beginPrevFadeOut();
-                setTimeout(() => { next(); }, 50);
-              }
+              triggerCrossfadeRef.current();
             }
           }
         }
@@ -625,7 +616,7 @@ export function GlobalAudioPlayer() {
       handoffRef.current = true;
       // Dual-deck: if song 1 is on a YouTube deck, keep that deck playing
       // as the "tail" and send song 2 to the other deck.
-      if (!usePipedAudio && showPlayer && youtubeId) {
+      if (deckHandoffTrackRef.current !== currentTrack?.id && !usePipedAudio && showPlayer && youtubeId) {
         const old = activeDeckRef.current;
         const nextDeck = DECKS[(DECKS.indexOf(old) + 1) % DECKS.length];
         const t = { id: youtubeId, deck: old };
@@ -689,11 +680,20 @@ export function GlobalAudioPlayer() {
     const requestToken = ++searchTokenRef.current;
     const switched = activeTrackIdRef.current !== (track?.id ?? null);
     activeTrackIdRef.current = track?.id ?? null;
+    // Deck handover already started this song on its own pre-warmed deck.
+    if (track && deckHandoffTrackRef.current === track.id) {
+      deckHandoffTrackRef.current = null;
+      handoffRef.current = false;
+      setIsSearching(false);
+      return;
+    }
+    deckHandoffTrackRef.current = null;
     // Stop the previous song right away so skips feel instant
     // (unless an automatic crossfade is handing over).
     const handoff = pendingFadeInRef.current || handoffRef.current;
     handoffRef.current = false;
     if (track && switched && !handoff) {
+      clearPreload();
       stopPrevAudio();
       if (audioRef.current) {
         try { audioRef.current.pause(); } catch {}
@@ -850,21 +850,34 @@ export function GlobalAudioPlayer() {
   const triggerCrossfade = useCallback(() => {
     if (crossfadeTriggeredRef.current || hasEndedRef.current) return;
     if (repeat === "one") return;
-    const djEnabled = (window as any).__djEnabled === true;
-    if (djEnabled) return; // DJ manages its own transitions
-
+    if ((window as any).__djEnabled === true) return;
+    const p = preloadRef.current;
+    // No pre-warmed deck ready → never skip: let the song play to its
+    // natural end and hand over normally.
+    if (!p || !nextTrack || p.trackId !== nextTrack.id || useNativeAudio) return;
     crossfadeTriggeredRef.current = true;
     pendingFadeInRef.current = true;
+    deckHandoffTrackRef.current = p.trackId;
 
-    // If using Piped audio, move the outgoing audio aside so it can keep
-    // playing while fading out — the new track will attach to audioRef.
+    // Outgoing song keeps playing on its own deck / audio element.
     if (audioRef.current && usePipedAudio) {
       beginPrevFadeOut();
+      setUsePipedAudio(false);
+    } else if (showPlayer && youtubeIdRef.current) {
+      const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
+      tailRef.current = t;
+      setTail(t);
     }
-
-    // Kick off the next track immediately so it overlaps the tail
-    setTimeout(() => { next(); }, 50);
-  }, [next, repeat, usePipedAudio, beginPrevFadeOut]);
+    try { deckRefs[p.deck].current?.setVolume?.(0); } catch {}
+    preloadRef.current = null;
+    setPreload(null);
+    activeDeckRef.current = p.deck;
+    setActiveDeck(p.deck);
+    resumeAtRef.current = 0;
+    setYoutubeId(p.id);
+    setShowPlayer(true);
+    next();
+  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut]);
 
   const handleProgress = useCallback(
     (currentTime: number, duration: number) => {
