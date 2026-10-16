@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AddToPlaylistDialog } from "@/components/AddToPlaylistDialog";
-import { setGlobalVolume, getGlobalVolume, seekGlobalAudio, getPlayerLoading, getCachedYouTubeId } from "@/components/player/GlobalAudioPlayer";
+import { setGlobalVolume, getGlobalVolume, seekGlobalAudio, getPlayerLoading, getCachedYouTubeId, getGlobalCurrentTime, getGlobalDuration } from "@/components/player/GlobalAudioPlayer";
 import { usePlayer } from "@/context/PlayerContext";
 import { cn } from "@/lib/utils";
 import { rightPanelPref } from "@/hooks/useUiPrefs";
@@ -57,12 +57,29 @@ export function DesktopPlayerBar() {
   }, []);
   const loading = searching || (!!currentTrack && !currentTrack.youtubeId && !getCachedYouTubeId(currentTrack.title, currentTrack.artist));
 
-  const actualDuration = duration || currentTrack?.duration || 0;
+  // Read the live position straight from the playing audio so the timer and
+  // bar always move, even if a progress event from a deck is missed.
+  const [live, setLive] = useState({ t: 0, d: 0 });
+  useEffect(() => {
+    setLive({ t: 0, d: 0 });
+    if (!currentTrack) return;
+    const id = setInterval(() => {
+      try { setLive({ t: getGlobalCurrentTime() || 0, d: getGlobalDuration() || 0 }); } catch { /* player not ready */ }
+    }, 500);
+    return () => clearInterval(id);
+  }, [currentTrack?.id]);
+
+  const actualDuration = live.d || duration || currentTrack?.duration || 0;
+  const elapsed = live.d > 0 ? live.t : progress * actualDuration;
+  const ratio = actualDuration > 0 ? Math.min(1, Math.max(0, elapsed / actualDuration)) : 0;
 
   const handleSeek = useCallback((value: number) => {
-    const ratio = value / 1000;
-    seek(ratio);
-    if (actualDuration > 0) seekGlobalAudio(ratio * actualDuration);
+    const r = value / 1000;
+    seek(r);
+    if (actualDuration > 0) {
+      seekGlobalAudio(r * actualDuration);
+      setLive({ t: r * actualDuration, d: actualDuration });
+    }
   }, [seek, actualDuration]);
 
   const toggleLike = useCallback(() => {
@@ -114,14 +131,15 @@ export function DesktopPlayerBar() {
             <Button variant="ghost" size="icon" className={cn("h-8 w-8", repeat !== "off" && "text-primary")} onClick={toggleRepeat} aria-label="Repeat">{repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}</Button>
           </div>
           <div className="flex items-center gap-2 text-[10px] tabular-nums text-muted-foreground">
-            <span className="w-9 text-right">{formatTime(progress * actualDuration)}</span>
+            <span className="w-9 text-right">{formatTime(elapsed)}</span>
             <input
               aria-label="Playback position"
               type="range"
               min="0"
               max="1000"
-              value={Math.round(progress * 1000)}
+              value={Math.round(ratio * 1000)}
               onChange={(e) => handleSeek(Number(e.target.value))}
+              style={{ background: `linear-gradient(to right, hsl(var(--foreground)) ${ratio * 100}%, hsl(var(--muted-foreground) / 0.35) ${ratio * 100}%)` }}
               className={cn("spotify-range w-full", loading && "animate-pulse")}
             />
             <span className="w-9">{formatTime(actualDuration)}</span>
