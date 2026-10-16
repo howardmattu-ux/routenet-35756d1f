@@ -1001,25 +1001,43 @@ export function GlobalAudioPlayer() {
     pendingFadeInRef.current = true;
     deckHandoffTrackRef.current = p.trackId;
 
-    // Outgoing song keeps playing on its own deck / audio element.
-    if (audioRef.current && usePipedAudio) {
+    // Outgoing song keeps playing on its own deck / audio element — never stopped.
+    const outgoingIsAudio = !!(audioRef.current && usePipedAudio);
+    if (outgoingIsAudio) {
       beginPrevFadeOut();
-      setUsePipedAudio(false);
+      startPrevFade(); // wires "stop when it naturally ends", full volume
     } else if (showPlayer && youtubeIdRef.current) {
       const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
       tailRef.current = t;
       setTail(t);
     }
-    try { deckRefs[p.deck].current?.setVolume?.(FADING_DISABLED ? getGlobalVolume() : 0); } catch {}
     preloadRef.current = null;
     setPreload(null);
     activeDeckRef.current = p.deck;
     setActiveDeck(p.deck);
     resumeAtRef.current = 0;
-    setYoutubeId(p.id);
-    setShowPlayer(true);
+    // Incoming deck shows its own loading state until it's actually playing.
+    setIsSearching(true);
+    if (p.audio) {
+      // Start the pre-warmed audio for the next deck in parallel.
+      const a = p.audio;
+      a.volume = getGlobalVolume();
+      audioRef.current = a;
+      activeTrackIdRef.current = p.trackId;
+      wirePipedDeckAudio(a, p.id, nextTrack);
+      a.addEventListener("playing", () => setIsSearching(false), { once: true });
+      a.play().then(() => setIsSearching(false)).catch(() => {});
+      setUsePipedAudio(true);
+      setYoutubeId(null);
+      setShowPlayer(false);
+    } else {
+      if (outgoingIsAudio) setUsePipedAudio(false);
+      try { deckRefs[p.deck].current?.setVolume?.(getGlobalVolume()); } catch {}
+      setYoutubeId(p.id);
+      setShowPlayer(true);
+    }
     next();
-  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut]);
+  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut, startPrevFade, wirePipedDeckAudio]);
   triggerCrossfadeRef.current = triggerCrossfade;
 
   const handleProgress = useCallback(
