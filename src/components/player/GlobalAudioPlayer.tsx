@@ -478,7 +478,7 @@ export function GlobalAudioPlayer() {
       (outgoing as any).__tailWired = true;
       const done = () => {
         try { outgoing.pause(); outgoing.removeAttribute("src"); outgoing.load(); } catch {}
-        if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
+        if (prevAudioRef.current === outgoing) { prevAudioRef.current = null; clearTail(); }
       };
       outgoing.addEventListener("ended", done, { once: true });
       outgoing.addEventListener("error", done, { once: true });
