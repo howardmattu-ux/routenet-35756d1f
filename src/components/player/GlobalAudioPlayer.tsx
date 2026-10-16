@@ -1043,6 +1043,7 @@ export function GlobalAudioPlayer() {
   const handleProgress = useCallback(
     (currentTime: number, duration: number) => {
       setProgress(currentTime, duration);
+      if (currentTime > 0) setIsSearching(false);
       if (
         isAutoMixEnabled() &&
         duration > (xfMs() / 1000) + 1 &&
