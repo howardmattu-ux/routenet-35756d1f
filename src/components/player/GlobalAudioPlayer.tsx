@@ -105,8 +105,15 @@ function proactiveCacheLikedSongs() {
 
 export type DeckName = "A" | "B" | "C" | "D";
 export const DECKS: DeckName[] = ["A", "B", "C", "D"];
-export type DeckStatus = { active: DeckName; tail: DeckName | null; activeTitle?: string };
-let lastDeckStatus: DeckStatus = { active: "A", tail: null };
+export type DeckInfo = { state: "live" | "fading" | "ready" | "idle"; title?: string };
+export type DeckStatus = {
+  active: DeckName;
+  tail: DeckName | null;
+  activeTitle?: string;
+  decks: Record<DeckName, DeckInfo>;
+};
+const idleDecks = (): Record<DeckName, DeckInfo> => ({ A: { state: "idle" }, B: { state: "idle" }, C: { state: "idle" }, D: { state: "idle" } });
+let lastDeckStatus: DeckStatus = { active: "A", tail: null, decks: idleDecks() };
 export function getDeckStatus() { return lastDeckStatus; }
 
 export function GlobalAudioPlayer() {
@@ -158,6 +165,17 @@ export function GlobalAudioPlayer() {
   // Position (seconds) the iframe should resume from after a stream failover.
   const resumeAtRef = useRef(0);
   const hasEndedRef = useRef(false); // Prevent double-fire of track end
+  // Live mirror of the queue so callbacks (which must not re-run per queue
+  // change) can still compute a track's assigned deck.
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  // Round-robin: the Nth song of the queue always lives on deck N % 4.
+  const deckOfIndex = useCallback((i: number): DeckName => DECKS[((i % DECKS.length) + DECKS.length) % DECKS.length], []);
+  const deckOfTrack = useCallback((track?: Track | null): DeckName | null => {
+    if (!track) return null;
+    const i = queueRef.current.findIndex((t) => t.id === track.id);
+    return i >= 0 ? deckOfIndex(i) : null;
+  }, [deckOfIndex]);
 
   const crossfadeTriggeredRef = useRef(false);
   const crossfadeFadeRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -165,14 +183,19 @@ export function GlobalAudioPlayer() {
   const pendingFadeInRef = useRef(false);
   const fadeInIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
-  // Pre-warmed deck: the next queued song is loaded (paused, silent) on its
-  // own deck so the crossfade trigger can start it instantly.
-  type Preload = { deck: DeckName; id: string; trackId: string };
+  // Pre-warmed deck: the next queued song is assigned its own deck and
+  // buffered there (paused, silent) so the crossfade trigger — or the Next
+  // button — can start it from that deck instantly, with zero re-resolve.
+  type Preload = { deck: DeckName; id: string; trackId: string; title?: string; audio: HTMLAudioElement | null };
   const [preload, setPreload] = useState<Preload | null>(null);
   const preloadRef = useRef<Preload | null>(null);
   const deckHandoffTrackRef = useRef<string | null>(null);
   const triggerCrossfadeRef = useRef<() => void>(() => {});
   const clearPreload = useCallback(() => {
+    const p = preloadRef.current;
+    if (p?.audio) {
+      try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch {}
+    }
     preloadRef.current = null;
     setPreload(null);
   }, []);
@@ -192,19 +215,44 @@ export function GlobalAudioPlayer() {
       if (cancelled || !id) return;
       cacheYouTubeId(nextTrack.title, nextTrack.artist, id);
       nextTrack.youtubeId = id;
+      // Each queue song owns exactly one deck, assigned in order A→B→C→D.
+      let deck = deckOfTrack(nextTrack) || "A";
       const busy = new Set<DeckName>([activeDeckRef.current]);
       if (tailRef.current) busy.add(tailRef.current.deck);
-      let deck = activeDeckRef.current;
-      for (let i = 1; i <= DECKS.length; i++) {
-        const d = DECKS[(DECKS.indexOf(activeDeckRef.current) + i) % DECKS.length];
-        if (!busy.has(d)) { deck = d; break; }
+      if (busy.has(deck)) {
+        for (let i = 1; i <= DECKS.length; i++) {
+          const d = DECKS[(DECKS.indexOf(deck) + i) % DECKS.length];
+          if (!busy.has(d)) { deck = d; break; }
+        }
       }
-      const p = { deck, id, trackId: nextTrack.id };
+      const p: Preload = { deck, id, trackId: nextTrack.id, title: nextTrack.title, audio: null };
+      // Prewarm a real audio element on that deck so the handover starts
+      // instantly. If no direct stream is available, the YouTube iframe
+      // deck is used as the fallback handover path instead.
+      if (!isNativeAudioPluginAvailable()) {
+        try {
+          const res = await getPipedAudioUrl(id, 6000);
+          if (cancelled) return;
+          if (res) {
+            const a = new Audio(res.url);
+            a.preload = "auto";
+            a.crossOrigin = "anonymous";
+            a.setAttribute("playsinline", "");
+            (a as any).playsInline = true;
+            a.volume = 0;
+            p.audio = a;
+          }
+        } catch { /* fall back to iframe deck */ }
+      }
+      if (cancelled) {
+        if (p.audio) { try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch {} }
+        return;
+      }
       preloadRef.current = p;
       setPreload(p);
     })();
     return () => { cancelled = true; };
-  }, [currentTrack?.id, nextTrack?.id, clearPreload]);
+  }, [currentTrack?.id, nextTrack?.id, clearPreload, deckOfTrack]);
 
   useEffect(() => {
     preloadYouTubeAPI();
@@ -411,12 +459,14 @@ export function GlobalAudioPlayer() {
     // so song 1 keeps playing at full volume while song 2 loads.
   }, [stopPrevAudio]);
 
-  const startPrevFade = useCallback(() => {
+  const startPrevFade = useCallback((durationMs?: number) => {
     const outgoing = prevAudioRef.current;
     if (!outgoing || prevFadeOutRef.current) return;
     const startVol = outgoing.volume;
-    const steps = Math.max(1, Math.floor(xfMs() / CROSSFADE_FADE_INTERVAL_MS));
+    const fadeMs = Math.max(CROSSFADE_FADE_INTERVAL_MS, durationMs ?? xfMs());
+    const steps = Math.max(1, Math.floor(fadeMs / CROSSFADE_FADE_INTERVAL_MS));
     let step = 0;
+    (outgoing as any).__fading = true;
     prevFadeOutRef.current = setInterval(() => {
       step++;
       try { outgoing.volume = Math.max(0, startVol * fadeOutCurve(Math.min(1, step / steps))); } catch {}
@@ -425,12 +475,88 @@ export function GlobalAudioPlayer() {
           clearInterval(prevFadeOutRef.current);
           prevFadeOutRef.current = undefined;
         }
+        (outgoing as any).__fading = false;
         try { outgoing.pause(); } catch {}
         try { outgoing.removeAttribute("src"); outgoing.load(); } catch {}
         if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
       }
     }, CROSSFADE_FADE_INTERVAL_MS);
   }, [stopPrevAudio]);
+
+  /**
+   * Wire one piped deck: queue advance on natural end, iframe failover on
+   * error/stall, and progress + crossfade triggering. Both the normal load
+   * path and the deck handover path route through here so every deck
+   * behaves identically.
+   */
+  const wirePipedDeckAudio = useCallback((audio: HTMLAudioElement, videoId: string | null, track: Track) => {
+    // Only the deck that is CURRENTLY active may advance the queue or fail
+    // over. A fading-out previous deck ending/erroring must never touch the
+    // new song (that caused the "skips the next song" and freeze bugs).
+    audio.addEventListener("ended", () => {
+      if (audioRef.current !== audio) return;
+      handleTrackEnd();
+    });
+
+    // If the direct stream dies part-way through (expired/geo-locked CDN
+    // URL, network hiccup), don't kill playback — hand the rest of the
+    // song over to the YouTube iframe at the exact same position so the
+    // track always plays to the end.
+    audio.addEventListener("error", () => {
+      if (audioRef.current !== audio) return; // stale/torn-down deck
+      if (!audio.src || audio.src === window.location.href) return; // intentional teardown
+      const at = audio.currentTime || 0;
+      console.warn("[Piped Audio] Playback error — failing over to iframe at", at);
+      markAsIframeOnly(videoId);
+      stopPipedAudio();
+      failoverToIframe(videoId, at);
+    });
+
+    if (pipedProgressRef.current) {
+      clearInterval(pipedProgressRef.current);
+      pipedProgressRef.current = undefined;
+    }
+    let lastTime = -1;
+    let stalledTicks = 0;
+    pipedProgressRef.current = setInterval(() => {
+      if (audioRef.current) {
+        const ct = audioRef.current.currentTime;
+        const dur = audioRef.current.duration;
+
+        // Stall watchdog: playback position frozen for ~8s while we think
+        // we're playing means the stream died silently. Fail over.
+        if (!audioRef.current.paused && !hasEndedRef.current) {
+          if (Math.abs(ct - lastTime) < 0.01) {
+            stalledTicks++;
+            if (stalledTicks > 32) {
+              stalledTicks = 0;
+              console.warn("[Piped Audio] Stalled — failing over to iframe at", ct);
+              markAsIframeOnly(videoId);
+              stopPipedAudio();
+              failoverToIframe(videoId, ct);
+              return;
+            }
+          } else {
+            stalledTicks = 0;
+          }
+        }
+        lastTime = ct;
+
+        if (dur > 0) {
+          setProgress(ct, dur);
+          if (
+            isAutoMixEnabled() &&
+            dur > (xfMs() / 1000) + 1 &&
+            dur - ct <= (xfMs() / 1000) &&
+            !crossfadeTriggeredRef.current &&
+            !hasEndedRef.current
+          ) {
+            triggerCrossfadeRef.current();
+          }
+        }
+      }
+    }, 250);
+  }, [handleTrackEnd, stopPipedAudio, failoverToIframe, setProgress]);
 
   // The track the user most recently selected — stale loads bail out.
   const activeTrackIdRef = useRef<string | null>(null);
@@ -525,79 +651,17 @@ export function GlobalAudioPlayer() {
         });
       }
 
-      // Only the deck that is CURRENTLY active may advance the queue or fail
-      // over. A fading-out previous deck ending/erroring must never touch the
-      // new song (that caused the "skips the next song" and freeze bugs).
-      audio.addEventListener("ended", () => {
-        if (audioRef.current !== audio) return;
-        handleTrackEnd();
-      });
-
-      // If the direct stream dies part-way through (expired/geo-locked CDN
-      // URL, network hiccup), don't kill playback — hand the rest of the
-      // song over to the YouTube iframe at the exact same position so the
-      // track always plays to the end.
-      audio.addEventListener("error", () => {
-        if (audioRef.current !== audio) return; // stale/torn-down deck
-        if (!audio.src || audio.src === window.location.href) return; // intentional teardown
-        const at = audio.currentTime || 0;
-        console.warn("[Piped Audio] Playback error — failing over to iframe at", at);
-        markAsIframeOnly(videoId);
-        stopPipedAudio();
-        failoverToIframe(videoId, at);
-      });
+      wirePipedDeckAudio(audio, videoId, track);
 
       await audio.play();
       setUsePipedAudio(true);
-
-      let lastTime = -1;
-      let stalledTicks = 0;
-      pipedProgressRef.current = setInterval(() => {
-        if (audioRef.current) {
-          const ct = audioRef.current.currentTime;
-          const dur = audioRef.current.duration;
-
-          // Stall watchdog: playback position frozen for ~8s while we think
-          // we're playing means the stream died silently. Fail over.
-          if (!audioRef.current.paused && !hasEndedRef.current) {
-            if (Math.abs(ct - lastTime) < 0.01) {
-              stalledTicks++;
-              if (stalledTicks > 32) {
-                stalledTicks = 0;
-                console.warn("[Piped Audio] Stalled — failing over to iframe at", ct);
-                markAsIframeOnly(videoId);
-                stopPipedAudio();
-                failoverToIframe(videoId, ct);
-                return;
-              }
-            } else {
-              stalledTicks = 0;
-            }
-          }
-          lastTime = ct;
-
-          if (dur > 0) {
-            setProgress(ct, dur);
-            if (
-              isAutoMixEnabled() &&
-              dur > (xfMs() / 1000) + 1 &&
-              dur - ct <= (xfMs() / 1000) &&
-              !crossfadeTriggeredRef.current &&
-              !hasEndedRef.current
-            ) {
-              triggerCrossfadeRef.current();
-            }
-          }
-        }
-      }, 250);
-
 
       console.log(`✅ Playing via Piped audio: ${track.title}`);
       return true;
     } catch {
       return false;
     }
-  }, [stopPipedAudio, setProgress, handleTrackEnd, beginPrevFadeOut, next, repeat]);
+  }, [stopPipedAudio, setProgress, wirePipedDeckAudio]);
 
   // Handle play/pause for piped or native audio
   useEffect(() => {
@@ -615,8 +679,12 @@ export function GlobalAudioPlayer() {
     if (!usePipedAudio || !audioRef.current) return;
     if (isPlaying) {
       audioRef.current.play().catch(() => {});
+      // Keep the outgoing crossfade tail in sync with play/pause so both
+      // decks share one transport control.
+      if (prevAudioRef.current && !prevFadeOutRef.current) prevAudioRef.current.play().catch(() => {});
     } else {
       audioRef.current.pause();
+      if (prevAudioRef.current && !prevFadeOutRef.current) prevAudioRef.current.pause();
     }
   }, [isPlaying, usePipedAudio, useNativeAudio, currentTrack?.id]);
 
