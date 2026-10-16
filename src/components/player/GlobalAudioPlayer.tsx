@@ -1059,9 +1059,13 @@ export function GlobalAudioPlayer() {
   }, [isPlaying, youtubeId, usePipedAudio, useNativeAudio]);
 
   useEffect(() => {
-    lastDeckStatus = { active: activeDeck, tail: tail?.deck ?? null, activeTitle: currentTrack?.title };
+    const decks = idleDecks();
+    if (preload && preload.deck !== activeDeck) decks[preload.deck] = { state: "ready", title: preload.title };
+    if (tail && tail.deck !== activeDeck) decks[tail.deck] = { state: "fading" };
+    decks[activeDeck] = { state: "live", title: currentTrack?.title };
+    lastDeckStatus = { active: activeDeck, tail: tail?.deck ?? null, activeTitle: currentTrack?.title, decks };
     window.dispatchEvent(new CustomEvent("deck-status", { detail: lastDeckStatus }));
-  }, [activeDeck, tail, currentTrack?.title]);
+  }, [activeDeck, tail, preload, currentTrack?.title]);
 
   const activeId = !usePipedAudio && showPlayer ? youtubeId : null;
   const deckId = (d: DeckName) =>
