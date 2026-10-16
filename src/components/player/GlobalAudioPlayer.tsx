@@ -459,12 +459,14 @@ export function GlobalAudioPlayer() {
     // so song 1 keeps playing at full volume while song 2 loads.
   }, [stopPrevAudio]);
 
-  const startPrevFade = useCallback(() => {
+  const startPrevFade = useCallback((durationMs?: number) => {
     const outgoing = prevAudioRef.current;
     if (!outgoing || prevFadeOutRef.current) return;
     const startVol = outgoing.volume;
-    const steps = Math.max(1, Math.floor(xfMs() / CROSSFADE_FADE_INTERVAL_MS));
+    const fadeMs = Math.max(CROSSFADE_FADE_INTERVAL_MS, durationMs ?? xfMs());
+    const steps = Math.max(1, Math.floor(fadeMs / CROSSFADE_FADE_INTERVAL_MS));
     let step = 0;
+    (outgoing as any).__fading = true;
     prevFadeOutRef.current = setInterval(() => {
       step++;
       try { outgoing.volume = Math.max(0, startVol * fadeOutCurve(Math.min(1, step / steps))); } catch {}
@@ -473,12 +475,88 @@ export function GlobalAudioPlayer() {
           clearInterval(prevFadeOutRef.current);
           prevFadeOutRef.current = undefined;
         }
+        (outgoing as any).__fading = false;
         try { outgoing.pause(); } catch {}
         try { outgoing.removeAttribute("src"); outgoing.load(); } catch {}
         if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
       }
     }, CROSSFADE_FADE_INTERVAL_MS);
   }, [stopPrevAudio]);
+
+  /**
+   * Wire one piped deck: queue advance on natural end, iframe failover on
+   * error/stall, and progress + crossfade triggering. Both the normal load
+   * path and the deck handover path route through here so every deck
+   * behaves identically.
+   */
+  const wirePipedDeckAudio = useCallback((audio: HTMLAudioElement, videoId: string | null, track: Track) => {
+    // Only the deck that is CURRENTLY active may advance the queue or fail
+    // over. A fading-out previous deck ending/erroring must never touch the
+    // new song (that caused the "skips the next song" and freeze bugs).
+    audio.addEventListener("ended", () => {
+      if (audioRef.current !== audio) return;
+      handleTrackEnd();
+    });
+
+    // If the direct stream dies part-way through (expired/geo-locked CDN
+    // URL, network hiccup), don't kill playback — hand the rest of the
+    // song over to the YouTube iframe at the exact same position so the
+    // track always plays to the end.
+    audio.addEventListener("error", () => {
+      if (audioRef.current !== audio) return; // stale/torn-down deck
+      if (!audio.src || audio.src === window.location.href) return; // intentional teardown
+      const at = audio.currentTime || 0;
+      console.warn("[Piped Audio] Playback error — failing over to iframe at", at);
+      markAsIframeOnly(videoId);
+      stopPipedAudio();
+      failoverToIframe(videoId, at);
+    });
+
+    if (pipedProgressRef.current) {
+      clearInterval(pipedProgressRef.current);
+      pipedProgressRef.current = undefined;
+    }
+    let lastTime = -1;
+    let stalledTicks = 0;
+    pipedProgressRef.current = setInterval(() => {
+      if (audioRef.current) {
+        const ct = audioRef.current.currentTime;
+        const dur = audioRef.current.duration;
+
+        // Stall watchdog: playback position frozen for ~8s while we think
+        // we're playing means the stream died silently. Fail over.
+        if (!audioRef.current.paused && !hasEndedRef.current) {
+          if (Math.abs(ct - lastTime) < 0.01) {
+            stalledTicks++;
+            if (stalledTicks > 32) {
+              stalledTicks = 0;
+              console.warn("[Piped Audio] Stalled — failing over to iframe at", ct);
+              markAsIframeOnly(videoId);
+              stopPipedAudio();
+              failoverToIframe(videoId, ct);
+              return;
+            }
+          } else {
+            stalledTicks = 0;
+          }
+        }
+        lastTime = ct;
+
+        if (dur > 0) {
+          setProgress(ct, dur);
+          if (
+            isAutoMixEnabled() &&
+            dur > (xfMs() / 1000) + 1 &&
+            dur - ct <= (xfMs() / 1000) &&
+            !crossfadeTriggeredRef.current &&
+            !hasEndedRef.current
+          ) {
+            triggerCrossfadeRef.current();
+          }
+        }
+      }
+    }, 250);
+  }, [handleTrackEnd, stopPipedAudio, failoverToIframe, setProgress]);
 
   // The track the user most recently selected — stale loads bail out.
   const activeTrackIdRef = useRef<string | null>(null);
