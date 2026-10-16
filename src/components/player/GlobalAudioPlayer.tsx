@@ -117,6 +117,8 @@ export type DeckStatus = {
 const idleDecks = (): Record<DeckName, DeckInfo> => ({ A: { state: "idle" }, B: { state: "idle" }, C: { state: "idle" }, D: { state: "idle" } });
 let lastDeckStatus: DeckStatus = { active: "A", tail: null, decks: idleDecks() };
 export function getDeckStatus() { return lastDeckStatus; }
+let lastLoading = false;
+export function getPlayerLoading() { return lastLoading; }
 
 export function GlobalAudioPlayer() {
   const {
@@ -305,6 +307,9 @@ export function GlobalAudioPlayer() {
   const fadeTail = useCallback(() => {
     const t = tailRef.current;
     if (!t || tailFadeRef.current) return;
+    // No fade: the outgoing deck plays at full volume to its natural end
+    // and is cleared by its own onEnd handler.
+    if (FADING_DISABLED) return;
     const steps = Math.max(1, Math.floor(xfMs() / CROSSFADE_FADE_INTERVAL_MS));
     let step = 0;
     tailFadeRef.current = setInterval(() => {
@@ -464,6 +469,18 @@ export function GlobalAudioPlayer() {
   const startPrevFade = useCallback((durationMs?: number) => {
     const outgoing = prevAudioRef.current;
     if (!outgoing || prevFadeOutRef.current) return;
+    if (FADING_DISABLED) {
+      // Song 1 keeps playing at full volume until it naturally ends.
+      if ((outgoing as any).__tailWired) return;
+      (outgoing as any).__tailWired = true;
+      const done = () => {
+        try { outgoing.pause(); outgoing.removeAttribute("src"); outgoing.load(); } catch {}
+        if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
+      };
+      outgoing.addEventListener("ended", done, { once: true });
+      outgoing.addEventListener("error", done, { once: true });
+      return;
+    }
     const startVol = outgoing.volume;
     const fadeMs = Math.max(CROSSFADE_FADE_INTERVAL_MS, durationMs ?? xfMs());
     const steps = Math.max(1, Math.floor(fadeMs / CROSSFADE_FADE_INTERVAL_MS));
@@ -745,10 +762,11 @@ export function GlobalAudioPlayer() {
           if (audio) audio.volume = v;
           else yt?.setVolume?.(v);
         };
-        setVol(0);
-        // Song 2 is now making sound — start fading song 1 out.
+        // Song 2 starts at normal volume while song 1 finishes on its deck.
         startPrevFade();
         fadeTail();
+        if (FADING_DISABLED) { try { setVol(getGlobalVolume()); } catch {} return true; }
+        setVol(0);
         const fadeMs = xfMs();
         const steps = Math.max(1, Math.floor(fadeMs / CROSSFADE_FADE_INTERVAL_MS));
         let step = 0;
@@ -969,7 +987,6 @@ export function GlobalAudioPlayer() {
   const triggerCrossfade = useCallback(() => {
     // Fading disabled: songs play fully at normal volume, then the next
     // song starts on its own deck when the current one ends.
-    if (FADING_DISABLED) return;
     if (crossfadeTriggeredRef.current || hasEndedRef.current) return;
     if (repeat === "one") return;
     if ((window as any).__djEnabled === true) return;
@@ -990,7 +1007,7 @@ export function GlobalAudioPlayer() {
       tailRef.current = t;
       setTail(t);
     }
-    try { deckRefs[p.deck].current?.setVolume?.(0); } catch {}
+    try { deckRefs[p.deck].current?.setVolume?.(FADING_DISABLED ? getGlobalVolume() : 0); } catch {}
     preloadRef.current = null;
     setPreload(null);
     activeDeckRef.current = p.deck;
@@ -1057,6 +1074,11 @@ export function GlobalAudioPlayer() {
     }
     return () => stopBackgroundKeepAlive();
   }, [isPlaying, youtubeId, usePipedAudio, useNativeAudio]);
+
+  useEffect(() => {
+    lastLoading = isSearching;
+    window.dispatchEvent(new CustomEvent("player-loading", { detail: isSearching }));
+  }, [isSearching]);
 
   useEffect(() => {
     const decks = idleDecks();

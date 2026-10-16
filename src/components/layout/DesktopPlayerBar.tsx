@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AddToPlaylistDialog } from "@/components/AddToPlaylistDialog";
-import { setGlobalVolume, getGlobalVolume, seekGlobalAudio } from "@/components/player/GlobalAudioPlayer";
+import { setGlobalVolume, getGlobalVolume, seekGlobalAudio, getPlayerLoading, getCachedYouTubeId } from "@/components/player/GlobalAudioPlayer";
 import { usePlayer } from "@/context/PlayerContext";
 import { cn } from "@/lib/utils";
 import { rightPanelPref } from "@/hooks/useUiPrefs";
@@ -48,6 +48,14 @@ export function DesktopPlayerBar() {
   }, [currentTrack?.title, currentTrack?.artist]);
 
   useEffect(() => setDownloadStatus("idle"), [currentTrack?.id]);
+
+  const [searching, setSearching] = useState(getPlayerLoading());
+  useEffect(() => {
+    const h = (e: Event) => setSearching(!!(e as CustomEvent<boolean>).detail);
+    window.addEventListener("player-loading", h);
+    return () => window.removeEventListener("player-loading", h);
+  }, []);
+  const loading = searching || (!!currentTrack && !currentTrack.youtubeId && !getCachedYouTubeId(currentTrack.title, currentTrack.artist));
 
   const actualDuration = duration || currentTrack?.duration || 0;
 
@@ -101,7 +109,7 @@ export function DesktopPlayerBar() {
           <div className="mb-1 flex items-center justify-center gap-2">
             <Button variant="ghost" size="icon" className={cn("h-8 w-8", shuffle && "text-primary")} onClick={toggleShuffle} aria-label="Shuffle"><Shuffle className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={previous} aria-label="Previous"><SkipBack className="h-4 w-4" fill="currentColor" /></Button>
-            <Button size="icon" className="mx-2 h-9 w-9 rounded-full bg-foreground text-background hover:scale-105 hover:bg-foreground" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>{isPlaying ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}</Button>
+            <Button size="icon" className="mx-2 h-9 w-9 rounded-full bg-foreground text-background hover:scale-105 hover:bg-foreground" onClick={togglePlay} aria-label={loading ? "Loading" : isPlaying ? "Pause" : "Play"}>{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : isPlaying ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}</Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={next} aria-label="Next"><SkipForward className="h-4 w-4" fill="currentColor" /></Button>
             <Button variant="ghost" size="icon" className={cn("h-8 w-8", repeat !== "off" && "text-primary")} onClick={toggleRepeat} aria-label="Repeat">{repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}</Button>
           </div>
@@ -114,7 +122,7 @@ export function DesktopPlayerBar() {
               max="1000"
               value={Math.round(progress * 1000)}
               onChange={(e) => handleSeek(Number(e.target.value))}
-              className="spotify-range w-full"
+              className={cn("spotify-range w-full", loading && "animate-pulse")}
             />
             <span className="w-9">{formatTime(actualDuration)}</span>
           </div>
