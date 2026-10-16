@@ -215,19 +215,44 @@ export function GlobalAudioPlayer() {
       if (cancelled || !id) return;
       cacheYouTubeId(nextTrack.title, nextTrack.artist, id);
       nextTrack.youtubeId = id;
+      // Each queue song owns exactly one deck, assigned in order A→B→C→D.
+      let deck = deckOfTrack(nextTrack) || "A";
       const busy = new Set<DeckName>([activeDeckRef.current]);
       if (tailRef.current) busy.add(tailRef.current.deck);
-      let deck = activeDeckRef.current;
-      for (let i = 1; i <= DECKS.length; i++) {
-        const d = DECKS[(DECKS.indexOf(activeDeckRef.current) + i) % DECKS.length];
-        if (!busy.has(d)) { deck = d; break; }
+      if (busy.has(deck)) {
+        for (let i = 1; i <= DECKS.length; i++) {
+          const d = DECKS[(DECKS.indexOf(deck) + i) % DECKS.length];
+          if (!busy.has(d)) { deck = d; break; }
+        }
       }
-      const p = { deck, id, trackId: nextTrack.id };
+      const p: Preload = { deck, id, trackId: nextTrack.id, title: nextTrack.title, audio: null };
+      // Prewarm a real audio element on that deck so the handover starts
+      // instantly. If no direct stream is available, the YouTube iframe
+      // deck is used as the fallback handover path instead.
+      if (!isNativeAudioPluginAvailable()) {
+        try {
+          const res = await getPipedAudioUrl(id, 6000);
+          if (cancelled) return;
+          if (res) {
+            const a = new Audio(res.url);
+            a.preload = "auto";
+            a.crossOrigin = "anonymous";
+            a.setAttribute("playsinline", "");
+            (a as any).playsInline = true;
+            a.volume = 0;
+            p.audio = a;
+          }
+        } catch { /* fall back to iframe deck */ }
+      }
+      if (cancelled) {
+        if (p.audio) { try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch {} }
+        return;
+      }
       preloadRef.current = p;
       setPreload(p);
     })();
     return () => { cancelled = true; };
-  }, [currentTrack?.id, nextTrack?.id, clearPreload]);
+  }, [currentTrack?.id, nextTrack?.id, clearPreload, deckOfTrack]);
 
   useEffect(() => {
     preloadYouTubeAPI();
