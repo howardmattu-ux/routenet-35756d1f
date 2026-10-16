@@ -929,25 +929,30 @@ export function GlobalAudioPlayer() {
 
   const activeId = !usePipedAudio && showPlayer ? youtubeId : null;
   const deckId = (d: DeckName) =>
-    d === activeDeck ? activeId : tail && tail.deck === d ? tail.id : null;
+    d === activeDeck ? activeId
+      : tail && tail.deck === d ? tail.id
+      : preload && preload.deck === d ? preload.id
+      : null;
   const ids = DECKS.map((d) => [d, deckId(d)] as const);
 
   if (!ids.some(([, id]) => id)) return null;
 
   const renderDeck = (d: DeckName, id: string | null) => {
     if (!id) return null;
-    const isActive = d === activeDeck;
+    const isActive = d === activeDeck && id === activeId;
+    const isTail = !isActive && tail?.deck === d;
+    const isPreload = !isActive && !isTail;
     return (
       <YouTubePlayer
         key={d}
         ref={deckRefs[d]}
         videoId={id}
         startSeconds={isActive ? resumeAtRef.current : 0}
-        isPlaying={isPlaying}
+        isPlaying={isPreload ? false : isPlaying}
         onProgress={isActive ? handleProgress : () => {}}
-        onEnd={isActive ? handleVideoEnd : clearTail}
+        onEnd={isActive ? handleVideoEnd : isTail ? clearTail : () => {}}
         onReady={() => console.log(`[GlobalAudioPlayer] Deck ${d} ready`)}
-        onError={isActive ? handlePlayerError : clearTail}
+        onError={isActive ? handlePlayerError : isTail ? clearTail : clearPreload}
       />
     );
   };
