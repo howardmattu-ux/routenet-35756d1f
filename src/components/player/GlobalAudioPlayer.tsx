@@ -1144,6 +1144,7 @@ export function seekGlobalAudio(seconds: number) {
   }
 }
 
+
 export function getGlobalCurrentTime(): number {
   const isPiped = (window as any).__isUsingPipedAudio?.();
   if (isPiped) {
