@@ -111,7 +111,7 @@ export function getDeckStatus() { return lastDeckStatus; }
 
 export function GlobalAudioPlayer() {
   const {
-    currentTrack, isPlaying, setProgress, next, repeat, queue, pause,
+    currentTrack, isPlaying, setProgress, next, repeat, queue, pause, nextTrack,
   } = usePlayer();
 
   const [youtubeId, setYoutubeId] = useState<string | null>(null);
@@ -164,6 +164,47 @@ export function GlobalAudioPlayer() {
   // Set when crossfade fired; consumed by the next track's load to fade in.
   const pendingFadeInRef = useRef(false);
   const fadeInIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  // Pre-warmed deck: the next queued song is loaded (paused, silent) on its
+  // own deck so the crossfade trigger can start it instantly.
+  type Preload = { deck: DeckName; id: string; trackId: string };
+  const [preload, setPreload] = useState<Preload | null>(null);
+  const preloadRef = useRef<Preload | null>(null);
+  const deckHandoffTrackRef = useRef<string | null>(null);
+  const triggerCrossfadeRef = useRef<() => void>(() => {});
+  const clearPreload = useCallback(() => {
+    preloadRef.current = null;
+    setPreload(null);
+  }, []);
+
+  useEffect(() => {
+    if (!isAutoMixEnabled() || !currentTrack || !nextTrack || nextTrack.id === currentTrack.id) {
+      if (preloadRef.current) clearPreload();
+      return;
+    }
+    if (preloadRef.current?.trackId === nextTrack.id) return;
+    let cancelled = false;
+    (async () => {
+      let id = nextTrack.youtubeId || getCachedYouTubeId(nextTrack.title, nextTrack.artist) || null;
+      if (!id) {
+        try { id = await searchYouTubeForTrack(nextTrack); } catch { id = null; }
+      }
+      if (cancelled || !id) return;
+      cacheYouTubeId(nextTrack.title, nextTrack.artist, id);
+      nextTrack.youtubeId = id;
+      const busy = new Set<DeckName>([activeDeckRef.current]);
+      if (tailRef.current) busy.add(tailRef.current.deck);
+      let deck = activeDeckRef.current;
+      for (let i = 1; i <= DECKS.length; i++) {
+        const d = DECKS[(DECKS.indexOf(activeDeckRef.current) + i) % DECKS.length];
+        if (!busy.has(d)) { deck = d; break; }
+      }
+      const p = { deck, id, trackId: nextTrack.id };
+      preloadRef.current = p;
+      setPreload(p);
+    })();
+    return () => { cancelled = true; };
+  }, [currentTrack?.id, nextTrack?.id, clearPreload]);
 
   useEffect(() => {
     preloadYouTubeAPI();
