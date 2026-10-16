@@ -27,3 +27,4 @@
 
 - [x] Four-deck playback: next deck starts 15s before current song ends, no fades
 - [ ] Profile page Spotify-style polish
+- [x] Crossfade menu: numbered players (1, 2, 3…) in song order, no switch at handover

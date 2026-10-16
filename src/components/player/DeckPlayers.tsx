@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Disc3, Loader2 } from "lucide-react";
-import { DECKS, getDeckStatus, getPlayerLoading, type DeckName, type DeckStatus } from "@/components/player/GlobalAudioPlayer";
+import { getDeckStatus, getPlayerLoading, type DeckStatus } from "@/components/player/GlobalAudioPlayer";
+import { usePlayer } from "@/context/PlayerContext";
 import { cn } from "@/lib/utils";
 
 type T = { t: number; d: number };
 const fmt = (s: number) => (s > 0 && Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "0:00");
 
-function Bar({ time, loading, live }: { time: T | null; loading?: boolean; live?: boolean }) {
+function Bar({ time, loading }: { time: T | null; loading?: boolean }) {
   const pct = time && time.d > 0 ? Math.min(100, (time.t / time.d) * 100) : 0;
   return (
     <div>
@@ -14,7 +15,7 @@ function Bar({ time, loading, live }: { time: T | null; loading?: boolean; live?
         {loading ? (
           <div className="absolute inset-y-0 w-1/3 animate-pulse rounded-full bg-primary/60" style={{ left: "33%" }} />
         ) : (
-          <div className={cn("h-full rounded-full", live ? "bg-primary" : "bg-muted-foreground")} style={{ width: `${pct}%` }} />
+          <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
         )}
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
@@ -25,12 +26,15 @@ function Bar({ time, loading, live }: { time: T | null; loading?: boolean; live?
   );
 }
 
-/** Four individual deck players (A–D) plus a live mix view: finishing song on top, starting song below. */
+/**
+ * Numbered players (1, 2, 3 … one per queue song). Players stay in song order,
+ * so when the next song starts the finishing one keeps its place — no switch.
+ */
 export function DeckPlayers() {
+  const { queue, currentTrack } = usePlayer();
   const [s, setS] = useState<DeckStatus>(getDeckStatus());
   const [loading, setLoading] = useState(getPlayerLoading());
   const [times, setTimes] = useState<{ live: T; tail: T | null }>({ live: { t: 0, d: 0 }, tail: null });
-  const titles = useRef<Partial<Record<DeckName, string>>>({});
 
   useEffect(() => {
     const h = (e: Event) => setS({ ...(e as CustomEvent<DeckStatus>).detail });
@@ -44,44 +48,29 @@ export function DeckPlayers() {
     return () => { window.removeEventListener("deck-status", h); window.removeEventListener("player-loading", l); clearInterval(iv); };
   }, []);
 
-  DECKS.forEach((d) => { const t = s.decks?.[d]?.title; if (t) titles.current[d] = t; });
-  const titleOf = (d: DeckName | null) => (d ? s.decks?.[d]?.title || titles.current[d] : undefined) || "—";
-  const mixing = !!s.tail && s.tail !== s.active;
+  const idx = queue.findIndex((t) => t.id === currentTrack?.id);
+  const overlap = !!s.tail && s.tail !== s.active && idx > 0;
+  const rows: { n: number; title: string; time: T | null; loading?: boolean; on: boolean }[] = [];
+  if (overlap) rows.push({ n: idx, title: queue[idx - 1]?.title ?? "—", time: times.tail, on: true });
+  if (idx >= 0) rows.push({ n: idx + 1, title: queue[idx].title, time: times.live, loading, on: true });
+  if (idx >= 0 && queue[idx + 1]) rows.push({ n: idx + 2, title: queue[idx + 1].title, time: null, on: false });
+
+  if (!rows.length) return <p className="text-xs text-muted-foreground">Play a song to see the players.</p>;
 
   return (
-    <div className="space-y-3">
-      <div className="rounded-md border border-border bg-muted/30 p-3">
-        <p className="mb-2 text-xs font-semibold text-foreground">{mixing ? "Mixing" : "Now playing"}</p>
-        {mixing && (
-          <div className="mb-3">
-            <p className="truncate text-xs text-foreground">Deck {s.tail} · {titleOf(s.tail)}</p>
-            <Bar time={times.tail} />
+    <div className="space-y-2">
+      {rows.map((r) => (
+        <div key={r.n} className={cn("rounded-md border p-3", r.on ? "border-primary bg-primary/10" : "border-border bg-muted/40")}>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-sm font-bold text-foreground">Player {r.n}</span>
+            {r.loading ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              : <Disc3 className={cn("h-4 w-4", r.on ? "animate-spin text-primary" : "text-muted-foreground")} />}
           </div>
-        )}
-        <p className="truncate text-xs font-medium text-foreground">Deck {s.active} · {titleOf(s.active)}</p>
-        <Bar time={times.live} loading={loading} live />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        {DECKS.map((d) => {
-          const info = s.decks?.[d] ?? { state: "idle" as const };
-          const live = d === s.active;
-          const tail = d === s.tail && !live;
-          const label = live ? (loading ? "Loading" : "Playing") : tail ? "Finishing" : info.state === "ready" ? "Next up" : "Empty";
-          return (
-            <div key={d} className={cn("rounded-md border p-3", live ? "border-primary bg-primary/10" : "border-border bg-muted/40")}>
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-sm font-bold text-foreground">Deck {d}</span>
-                {live && loading ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  : <Disc3 className={cn("h-4 w-4", live || tail ? "animate-spin text-primary" : "text-muted-foreground")} />}
-              </div>
-              <p className="truncate text-xs text-foreground">{live || tail || info.state === "ready" ? titleOf(d) : "—"}</p>
-              <p className={cn("mb-1 text-[10px]", live ? "text-primary" : "text-muted-foreground")}>{label}</p>
-              {(live || tail) && <Bar time={live ? times.live : times.tail} loading={live && loading} live={live} />}
-            </div>
-          );
-        })}
-      </div>
+          <p className="truncate text-xs text-foreground">{r.title}</p>
+          <p className={cn("mb-1 text-[10px]", r.on ? "text-primary" : "text-muted-foreground")}>{r.on ? "Playing" : "Next up"}</p>
+          {r.on && <Bar time={r.time} loading={r.loading} />}
+        </div>
+      ))}
     </div>
   );
 }
