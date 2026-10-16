@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
+import { getCrossfade } from "@/lib/crossfadePrefs";
 import { usePlayer } from "@/context/PlayerContext";
 import { YouTubePlayer, YouTubePlayerRef, preloadYouTubeAPI } from "./YouTubePlayer";
 import { searchYouTubeForTrack } from "@/hooks/useYouTubePlayback";
@@ -20,6 +21,23 @@ import {
 } from "@/services/nativeAudioPlayer";
 
 const youtubeIdCache = new Map<string, string>();
+
+// Crossfade settings: 12s overlap. The outgoing track keeps playing to
+// its natural end while the incoming track fades in over the same window
+// so two songs literally play simultaneously during the handover.
+// Only active when AutoMix is explicitly enabled — otherwise tracks play
+// in full with a hard cut between them (no fade, no truncation).
+const CROSSFADE_FADE_INTERVAL_MS = 100;
+// Volume fading in/out caused songs to freeze — kept off.
+const FADING_DISABLED = true;
+// Four-deck rule: the next deck always starts exactly 15s before the current
+// song ends. Songs of 16s or less simply play out and hand over on end.
+const DECK_OVERLAP_SECONDS = 15;
+function xfMs() { return DECK_OVERLAP_SECONDS * 1000; }
+function isAutoMixEnabled(): boolean { void getCrossfade; return true; }
+// Equal-power curves so the overlap sounds smooth (no volume dip mid-fade).
+const fadeOutCurve = (t: number) => Math.cos(t * Math.PI / 2);
+const fadeInCurve = (t: number) => Math.sin(t * Math.PI / 2);
 
 function getCacheKey(title: string, artist: string): string {
   return `${title.toLowerCase().trim()}|${artist.toLowerCase().trim()}`;
@@ -90,12 +108,24 @@ function proactiveCacheLikedSongs() {
   } catch {}
 }
 
+export type DeckName = "A" | "B" | "C" | "D";
+export const DECKS: DeckName[] = ["A", "B", "C", "D"];
+export type DeckInfo = { state: "live" | "fading" | "ready" | "idle"; title?: string };
+export type DeckStatus = {
+  active: DeckName;
+  tail: DeckName | null;
+  activeTitle?: string;
+  decks: Record<DeckName, DeckInfo>;
+};
+const idleDecks = (): Record<DeckName, DeckInfo> => ({ A: { state: "idle" }, B: { state: "idle" }, C: { state: "idle" }, D: { state: "idle" } });
+let lastDeckStatus: DeckStatus = { active: "A", tail: null, decks: idleDecks() };
+export function getDeckStatus() { return lastDeckStatus; }
 let lastLoading = false;
 export function getPlayerLoading() { return lastLoading; }
 
 export function GlobalAudioPlayer() {
   const {
-    currentTrack, isPlaying, setProgress, next, repeat,
+    currentTrack, isPlaying, setProgress, next, repeat, queue, pause, nextTrack,
   } = usePlayer();
 
   const [youtubeId, setYoutubeId] = useState<string | null>(null);
@@ -103,9 +133,26 @@ export function GlobalAudioPlayer() {
   const [showPlayer, setShowPlayer] = useState(false);
   const [usePipedAudio, setUsePipedAudio] = useState(false);
   const [useNativeAudio, setUseNativeAudio] = useState(false);
-  const playerRef = useRef<YouTubePlayerRef>(null);
+  // Dual decks: two YouTube players so song 1 keeps playing while song 2 starts.
+  const deckARef = useRef<YouTubePlayerRef>(null);
+  const deckBRef = useRef<YouTubePlayerRef>(null);
+  const deckCRef = useRef<YouTubePlayerRef>(null);
+  const deckDRef = useRef<YouTubePlayerRef>(null);
+  const deckRefs = { A: deckARef, B: deckBRef, C: deckCRef, D: deckDRef } as const;
+  const [activeDeck, setActiveDeck] = useState<DeckName>("A");
+  const activeDeckRef = useRef<DeckName>("A");
+  const [tail, setTail] = useState<{ id: string; deck: DeckName } | null>(null);
+  const tailRef = useRef<{ id: string; deck: DeckName } | null>(null);
+  const tailFadeRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const handoffRef = useRef(false);
   const youtubeIdRef = useRef<string | null>(null);
   youtubeIdRef.current = youtubeId;
+  // playerRef always points at the active deck.
+  const playerRef = useRef({
+    get current(): YouTubePlayerRef | null {
+      return deckRefs[activeDeckRef.current].current;
+    },
+  }).current as React.RefObject<YouTubePlayerRef>;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const nativeProgressRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const nativeEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -114,6 +161,10 @@ export function GlobalAudioPlayer() {
   // Object URL for the currently playing offline download, revoked on swap.
   const localBlobUrlRef = useRef<string | null>(null);
 
+  // While crossfading, the outgoing audio is moved here so the new track
+  // can be created in audioRef without killing the tail of the previous song.
+  const prevAudioRef = useRef<HTMLAudioElement | null>(null);
+  const prevFadeOutRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const searchTokenRef = useRef(0);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pipedProgressRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -121,6 +172,95 @@ export function GlobalAudioPlayer() {
   // Position (seconds) the iframe should resume from after a stream failover.
   const resumeAtRef = useRef(0);
   const hasEndedRef = useRef(false); // Prevent double-fire of track end
+  // Live mirror of the queue so callbacks (which must not re-run per queue
+  // change) can still compute a track's assigned deck.
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  // Round-robin: the Nth song of the queue always lives on deck N % 4.
+  const deckOfIndex = useCallback((i: number): DeckName => DECKS[((i % DECKS.length) + DECKS.length) % DECKS.length], []);
+  const deckOfTrack = useCallback((track?: Track | null): DeckName | null => {
+    if (!track) return null;
+    const i = queueRef.current.findIndex((t) => t.id === track.id);
+    return i >= 0 ? deckOfIndex(i) : null;
+  }, [deckOfIndex]);
+
+  const crossfadeTriggeredRef = useRef(false);
+  const crossfadeFadeRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  // Set when crossfade fired; consumed by the next track's load to fade in.
+  const pendingFadeInRef = useRef(false);
+  const fadeInIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  // Pre-warmed deck: the next queued song is assigned its own deck and
+  // buffered there (paused, silent) so the crossfade trigger — or the Next
+  // button — can start it from that deck instantly, with zero re-resolve.
+  type Preload = { deck: DeckName; id: string; trackId: string; title?: string; audio: HTMLAudioElement | null };
+  const [preload, setPreload] = useState<Preload | null>(null);
+  const preloadRef = useRef<Preload | null>(null);
+  const deckHandoffTrackRef = useRef<string | null>(null);
+  const triggerCrossfadeRef = useRef<() => void>(() => {});
+  const clearPreload = useCallback(() => {
+    const p = preloadRef.current;
+    if (p?.audio) {
+      try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch {}
+    }
+    preloadRef.current = null;
+    setPreload(null);
+  }, []);
+
+  useEffect(() => {
+    if (!isAutoMixEnabled() || !currentTrack || !nextTrack || nextTrack.id === currentTrack.id) {
+      if (preloadRef.current) clearPreload();
+      return;
+    }
+    if (preloadRef.current?.trackId === nextTrack.id) return;
+    let cancelled = false;
+    (async () => {
+      let id = nextTrack.youtubeId || getCachedYouTubeId(nextTrack.title, nextTrack.artist) || null;
+      if (!id) {
+        try { id = await searchYouTubeForTrack(nextTrack); } catch { id = null; }
+      }
+      if (cancelled || !id) return;
+      cacheYouTubeId(nextTrack.title, nextTrack.artist, id);
+      nextTrack.youtubeId = id;
+      // Each queue song owns exactly one deck, assigned in order A→B→C→D.
+      let deck = deckOfTrack(nextTrack) || "A";
+      const busy = new Set<DeckName>([activeDeckRef.current]);
+      if (tailRef.current) busy.add(tailRef.current.deck);
+      if (busy.has(deck)) {
+        for (let i = 1; i <= DECKS.length; i++) {
+          const d = DECKS[(DECKS.indexOf(deck) + i) % DECKS.length];
+          if (!busy.has(d)) { deck = d; break; }
+        }
+      }
+      const p: Preload = { deck, id, trackId: nextTrack.id, title: nextTrack.title, audio: null };
+      // Prewarm a real audio element on that deck so the handover starts
+      // instantly. If no direct stream is available, the YouTube iframe
+      // deck is used as the fallback handover path instead.
+      if (!isNativeAudioPluginAvailable()) {
+        try {
+          const res = await getPipedAudioUrl(id, 6000);
+          if (cancelled) return;
+          if (res) {
+            const a = new Audio(res.url);
+            a.preload = "auto";
+            a.crossOrigin = "anonymous";
+            a.setAttribute("playsinline", "");
+            (a as any).playsInline = true;
+            a.volume = 0;
+            p.audio = a;
+          }
+        } catch { /* fall back to iframe deck */ }
+      }
+      if (cancelled) {
+        if (p.audio) { try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch {} }
+        return;
+      }
+      preloadRef.current = p;
+      setPreload(p);
+    })();
+    return () => { cancelled = true; };
+  }, [currentTrack?.id, nextTrack?.id, clearPreload, deckOfTrack]);
+
   useEffect(() => {
     preloadYouTubeAPI();
     syncDownloadIndex();
@@ -155,6 +295,46 @@ export function GlobalAudioPlayer() {
     }
   }, [currentTrack?.id, queue]);
 
+  const clearTail = useCallback(() => {
+    if (tailFadeRef.current) {
+      clearInterval(tailFadeRef.current);
+      tailFadeRef.current = undefined;
+    }
+    if (tailRef.current) {
+      tailRef.current = null;
+      setTail(null);
+    }
+  }, []);
+
+  // Fade the outgoing YouTube deck (song 1) down while song 2 fades up.
+  const fadeTail = useCallback(() => {
+    const t = tailRef.current;
+    if (!t || tailFadeRef.current) return;
+    // No fade: the outgoing deck plays at full volume to its natural end
+    // and is cleared by its own onEnd handler.
+    if (FADING_DISABLED) return;
+    const steps = Math.max(1, Math.floor(xfMs() / CROSSFADE_FADE_INTERVAL_MS));
+    let step = 0;
+    tailFadeRef.current = setInterval(() => {
+      step++;
+      try { deckRefs[t.deck].current?.setVolume?.(Math.max(0, fadeOutCurve(Math.min(1, step / steps)))); } catch {}
+      if (step >= steps) clearTail();
+    }, CROSSFADE_FADE_INTERVAL_MS);
+  }, [clearTail]);
+
+  const stopPrevAudio = useCallback(() => {
+    if (prevFadeOutRef.current) {
+      clearInterval(prevFadeOutRef.current);
+      prevFadeOutRef.current = undefined;
+    }
+    if (prevAudioRef.current) {
+      try { prevAudioRef.current.pause(); } catch {}
+      try { prevAudioRef.current.removeAttribute("src"); prevAudioRef.current.load(); } catch {}
+      prevAudioRef.current = null;
+    }
+    clearTail();
+  }, [clearTail]);
+
   const stopNativeAudioPlayback = useCallback(async () => {
     if (nativeProgressRef.current) {
       clearInterval(nativeProgressRef.current);
@@ -175,6 +355,9 @@ export function GlobalAudioPlayer() {
   // Handle track end — called from both iframe and piped
   const handleTrackEnd = useCallback(() => {
     if (hasEndedRef.current) return; // Prevent double-fire
+    // Crossfade: the next player already started at the 15s mark, so a song
+    // finishing must never advance, switch or stop anything — it just goes idle.
+    if (isAutoMixEnabled() && crossfadeTriggeredRef.current && repeat !== "one") return;
     hasEndedRef.current = true;
 
     // Only fire DJ event if DJ is enabled (avoids interference with normal playback)
@@ -248,6 +431,10 @@ export function GlobalAudioPlayer() {
       clearInterval(pipedProgressRef.current);
       pipedProgressRef.current = undefined;
     }
+    if (crossfadeFadeRef.current) {
+      clearInterval(crossfadeFadeRef.current);
+      crossfadeFadeRef.current = undefined;
+    }
     setUsePipedAudio(false);
     stopNativeAudioPlayback().catch(() => {});
   }, [stopNativeAudioPlayback]);
@@ -266,10 +453,71 @@ export function GlobalAudioPlayer() {
 
 
   /**
-   * Wire piped audio: queue advance on natural end and iframe failover on
-   * error or stall.
+   * Promote audioRef to prevAudioRef and begin fading it out over the
+   * crossfade window. The element keeps playing — only `audioRef` is
+   * cleared so the next track can attach without cutting the tail.
+   */
+  const beginPrevFadeOut = useCallback(() => {
+    // Kill any earlier prev (very fast back-to-back crossfade)
+    stopPrevAudio();
+    const outgoing = audioRef.current;
+    if (!outgoing) return;
+    prevAudioRef.current = outgoing;
+    audioRef.current = null;
+    if (pipedProgressRef.current) {
+      clearInterval(pipedProgressRef.current);
+      pipedProgressRef.current = undefined;
+    }
+    // The fade itself starts once song 2 is actually playing (startPrevFade),
+    // so song 1 keeps playing at full volume while song 2 loads.
+  }, [stopPrevAudio]);
+
+  const startPrevFade = useCallback((durationMs?: number) => {
+    const outgoing = prevAudioRef.current;
+    if (!outgoing || prevFadeOutRef.current) return;
+    if (FADING_DISABLED) {
+      // Song 1 keeps playing at full volume until it naturally ends.
+      if ((outgoing as any).__tailWired) return;
+      (outgoing as any).__tailWired = true;
+      const done = () => {
+        try { outgoing.pause(); outgoing.removeAttribute("src"); outgoing.load(); } catch {}
+        if (prevAudioRef.current === outgoing) { prevAudioRef.current = null; clearTail(); }
+      };
+      outgoing.addEventListener("ended", done, { once: true });
+      outgoing.addEventListener("error", done, { once: true });
+      return;
+    }
+    const startVol = outgoing.volume;
+    const fadeMs = Math.max(CROSSFADE_FADE_INTERVAL_MS, durationMs ?? xfMs());
+    const steps = Math.max(1, Math.floor(fadeMs / CROSSFADE_FADE_INTERVAL_MS));
+    let step = 0;
+    (outgoing as any).__fading = true;
+    prevFadeOutRef.current = setInterval(() => {
+      step++;
+      try { outgoing.volume = Math.max(0, startVol * fadeOutCurve(Math.min(1, step / steps))); } catch {}
+      if (step >= steps) {
+        if (prevFadeOutRef.current) {
+          clearInterval(prevFadeOutRef.current);
+          prevFadeOutRef.current = undefined;
+        }
+        (outgoing as any).__fading = false;
+        try { outgoing.pause(); } catch {}
+        try { outgoing.removeAttribute("src"); outgoing.load(); } catch {}
+        if (prevAudioRef.current === outgoing) prevAudioRef.current = null;
+      }
+    }, CROSSFADE_FADE_INTERVAL_MS);
+  }, [stopPrevAudio, clearTail]);
+
+  /**
+   * Wire one piped deck: queue advance on natural end, iframe failover on
+   * error/stall, and progress + crossfade triggering. Both the normal load
+   * path and the deck handover path route through here so every deck
+   * behaves identically.
    */
   const wirePipedDeckAudio = useCallback((audio: HTMLAudioElement, videoId: string | null, track: Track) => {
+    // Only the deck that is CURRENTLY active may advance the queue or fail
+    // over. A fading-out previous deck ending/erroring must never touch the
+    // new song (that caused the "skips the next song" and freeze bugs).
     audio.addEventListener("ended", () => {
       if (audioRef.current !== audio) return;
       handleTrackEnd();
@@ -321,6 +569,15 @@ export function GlobalAudioPlayer() {
 
         if (dur > 0) {
           setProgress(ct, dur);
+          if (
+            isAutoMixEnabled() &&
+            dur > (xfMs() / 1000) + 1 &&
+            dur - ct <= (xfMs() / 1000) &&
+            !crossfadeTriggeredRef.current &&
+            !hasEndedRef.current
+          ) {
+            triggerCrossfadeRef.current();
+          }
         }
       }
     }, 250);
@@ -447,14 +704,29 @@ export function GlobalAudioPlayer() {
     if (!usePipedAudio || !audioRef.current) return;
     if (isPlaying) {
       audioRef.current.play().catch(() => {});
+      // Keep the outgoing crossfade tail in sync with play/pause so both
+      // decks share one transport control.
+      if (prevAudioRef.current && !prevFadeOutRef.current) prevAudioRef.current.play().catch(() => {});
     } else {
       audioRef.current.pause();
+      if (prevAudioRef.current && !prevFadeOutRef.current) prevAudioRef.current.pause();
     }
   }, [isPlaying, usePipedAudio, useNativeAudio, currentTrack?.id]);
 
   // Reset hasEnded when track changes
   useEffect(() => {
     hasEndedRef.current = false;
+    crossfadeTriggeredRef.current = false;
+    if (crossfadeFadeRef.current) {
+      clearInterval(crossfadeFadeRef.current);
+      crossfadeFadeRef.current = undefined;
+    }
+    // If this track change was NOT triggered by an automix crossfade,
+    // stop any lingering previous-audio fade-out so we don't have two
+    // tracks overlapping after a manual skip.
+    if (!pendingFadeInRef.current) {
+      stopPrevAudio();
+    }
     if (useNativeAudio) {
       nativeCurrentTimeRef.current = 0;
       if (nativeProgressRef.current) {
@@ -466,6 +738,75 @@ export function GlobalAudioPlayer() {
         nativeEndTimeoutRef.current = undefined;
       }
     }
+    // If a crossfade triggered this transition, ramp the new track's
+    // volume from 0 to 1 over the fade-in window (Piped audio only —
+    // YouTube iframe volume control isn't reliable cross-origin).
+    if (fadeInIntervalRef.current) {
+      clearInterval(fadeInIntervalRef.current);
+      fadeInIntervalRef.current = undefined;
+    }
+    if (pendingFadeInRef.current) {
+      pendingFadeInRef.current = false;
+      handoffRef.current = true;
+      // Dual-deck: if song 1 is on a YouTube deck, keep that deck playing
+      // as the "tail" and send song 2 to the other deck.
+      if (deckHandoffTrackRef.current !== currentTrack?.id && !usePipedAudio && showPlayer && youtubeId) {
+        const old = activeDeckRef.current;
+        const nextDeck = DECKS[(DECKS.indexOf(old) + 1) % DECKS.length];
+        const t = { id: youtubeId, deck: old };
+        tailRef.current = t;
+        setTail(t);
+        activeDeckRef.current = nextDeck;
+        setActiveDeck(nextDeck);
+        setYoutubeId(null);
+      }
+      const ramp = () => {
+        const audio = audioRef.current;
+        const yt = !audio ? deckRefs[activeDeckRef.current].current : null;
+        if (!audio && !(yt && youtubeIdRef.current)) return false;
+        const setVol = (v: number) => {
+          if (audio) audio.volume = v;
+          else yt?.setVolume?.(v);
+        };
+        // Song 2 starts at normal volume while song 1 finishes on its deck.
+        startPrevFade();
+        fadeTail();
+        if (FADING_DISABLED) { try { setVol(getGlobalVolume()); } catch {} return true; }
+        setVol(0);
+        const fadeMs = xfMs();
+        const steps = Math.max(1, Math.floor(fadeMs / CROSSFADE_FADE_INTERVAL_MS));
+        let step = 0;
+        fadeInIntervalRef.current = setInterval(() => {
+          step++;
+          try { setVol(Math.min(1, fadeInCurve(step / steps))); } catch {}
+          if (step >= steps && fadeInIntervalRef.current) {
+            try { setVol(1); } catch {}
+            clearInterval(fadeInIntervalRef.current);
+            fadeInIntervalRef.current = undefined;
+          }
+        }, CROSSFADE_FADE_INTERVAL_MS);
+        // Safety net: never leave the new song stuck silent if the fade
+        // gets interrupted (track change, tab throttling, etc.).
+        setTimeout(() => {
+          try { setVol(1); } catch {}
+        }, fadeMs + 1500);
+        return true;
+      };
+      // Song 2 may still be loading — song 1 keeps playing at full volume
+      // until it's ready, then both blend.
+      let tries = 0;
+      const waiter = setInterval(() => {
+        tries++;
+        if (ramp()) { clearInterval(waiter); return; }
+        if (tries > 60) {
+          clearInterval(waiter);
+          startPrevFade();
+          fadeTail();
+        }
+      }, 200);
+    } else if (audioRef.current) {
+      audioRef.current.volume = 1;
+    }
   }, [currentTrack?.id]);
 
   // Search YouTube for current track
@@ -474,7 +815,30 @@ export function GlobalAudioPlayer() {
     const requestToken = ++searchTokenRef.current;
     const switched = activeTrackIdRef.current !== (track?.id ?? null);
     activeTrackIdRef.current = track?.id ?? null;
+    // Deck handover already started this song on its own pre-warmed deck.
+    if (track && deckHandoffTrackRef.current === track.id) {
+      deckHandoffTrackRef.current = null;
+      handoffRef.current = false;
+      // Loading clears once the incoming deck actually starts playing.
+      return;
+    }
+    deckHandoffTrackRef.current = null;
+    // Stop the previous song right away so skips feel instant
+    // (unless an automatic crossfade is handing over).
+    const handoff = pendingFadeInRef.current || handoffRef.current;
+    handoffRef.current = false;
+    // Each song owns its deck: Next moves forward, Back moves backward.
     if (track && switched) {
+      const d = deckOfTrack(track);
+      // Never take over the deck that is still finishing the previous song.
+      if (d && d !== activeDeckRef.current && d !== tailRef.current?.deck) {
+        activeDeckRef.current = d;
+        setActiveDeck(d);
+      }
+    }
+    if (track && switched && !handoff) {
+      clearPreload();
+      stopPrevAudio();
       if (audioRef.current) {
         try { audioRef.current.pause(); } catch {}
       }
@@ -518,7 +882,9 @@ export function GlobalAudioPlayer() {
           return;
         }
       }
-      // On web (no native plugin), try Piped first for direct audio controls.
+      // On web (no native plugin), still try Piped first — it gives us real
+      // <audio> control which is the only way crossfade can overlap two
+      // tracks. The YouTube iframe can't be ducked/overlapped reliably.
       if (!isNativeAudioPluginAvailable()) {
         const pipedOk = await tryPlayWithPiped(videoId, track);
         if (pipedOk) {
@@ -625,12 +991,100 @@ export function GlobalAudioPlayer() {
     };
   }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, currentTrack?.youtubeId, next, stopPipedAudio, tryPlayWithPiped]);
 
+  const triggerCrossfade = useCallback(() => {
+    // Fading disabled: songs play fully at normal volume, then the next
+    // song starts on its own deck when the current one ends.
+    if (crossfadeTriggeredRef.current || hasEndedRef.current) return;
+    if (repeat === "one") return;
+    if ((window as any).__djEnabled === true) return;
+    const p = preloadRef.current;
+    if (!nextTrack || useNativeAudio) return;
+    // Next song not pre-loaded yet: still start it NOW on a fresh player while
+    // the current song keeps playing untouched to its own natural end.
+    if (!p || p.trackId !== nextTrack.id) {
+      crossfadeTriggeredRef.current = true;
+      pendingFadeInRef.current = true;
+      if (audioRef.current && usePipedAudio) {
+        beginPrevFadeOut();
+        startPrevFade();
+        const t = { id: "", deck: activeDeckRef.current };
+        tailRef.current = t;
+        setTail(t);
+      } else if (showPlayer && youtubeIdRef.current) {
+        // Finishing song keeps its own player; the new song gets the next one.
+        const old = activeDeckRef.current;
+        const nd = DECKS[(DECKS.indexOf(old) + 1) % DECKS.length];
+        const t = { id: youtubeIdRef.current, deck: old };
+        tailRef.current = t; setTail(t);
+        deckHandoffTrackRef.current = null;
+        activeDeckRef.current = nd; setActiveDeck(nd);
+        setYoutubeId(null);
+      }
+      setIsSearching(true);
+      next();
+      return;
+    }
+    crossfadeTriggeredRef.current = true;
+    pendingFadeInRef.current = true;
+    deckHandoffTrackRef.current = p.trackId;
+
+    // Outgoing song keeps playing on its own deck / audio element — never stopped.
+    const outgoingIsAudio = !!(audioRef.current && usePipedAudio);
+    if (outgoingIsAudio) {
+      beginPrevFadeOut();
+      startPrevFade(); // wires "stop when it naturally ends", full volume
+      const t = { id: "", deck: activeDeckRef.current };
+      tailRef.current = t;
+      setTail(t);
+    } else if (showPlayer && youtubeIdRef.current) {
+      const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
+      tailRef.current = t;
+      setTail(t);
+    }
+    preloadRef.current = null;
+    setPreload(null);
+    activeDeckRef.current = p.deck;
+    setActiveDeck(p.deck);
+    resumeAtRef.current = 0;
+    // Incoming deck shows its own loading state until it's actually playing.
+    setIsSearching(true);
+    if (p.audio) {
+      // Start the pre-warmed audio for the next deck in parallel.
+      const a = p.audio;
+      a.volume = getGlobalVolume();
+      audioRef.current = a;
+      activeTrackIdRef.current = p.trackId;
+      wirePipedDeckAudio(a, p.id, nextTrack);
+      a.addEventListener("playing", () => setIsSearching(false), { once: true });
+      a.play().then(() => setIsSearching(false)).catch(() => {});
+      setUsePipedAudio(true);
+      setYoutubeId(null);
+      setShowPlayer(false);
+    } else {
+      if (outgoingIsAudio) setUsePipedAudio(false);
+      try { deckRefs[p.deck].current?.setVolume?.(getGlobalVolume()); } catch {}
+      setYoutubeId(p.id);
+      setShowPlayer(true);
+    }
+    next();
+  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut, startPrevFade, wirePipedDeckAudio]);
+  triggerCrossfadeRef.current = triggerCrossfade;
+
   const handleProgress = useCallback(
     (currentTime: number, duration: number) => {
       setProgress(currentTime, duration);
       if (currentTime > 0) setIsSearching(false);
+      if (
+        isAutoMixEnabled() &&
+        duration > (xfMs() / 1000) + 1 &&
+        currentTime > 0 &&
+        duration - currentTime <= (xfMs() / 1000) &&
+        !crossfadeTriggeredRef.current
+      ) {
+        triggerCrossfade();
+      }
     },
-    [setProgress]
+    [setProgress, triggerCrossfade]
   );
 
   const handleVideoEnd = useCallback(() => {
@@ -656,6 +1110,17 @@ export function GlobalAudioPlayer() {
 
   useEffect(() => {
     (window as any).__globalAudioPlayerRef = playerRef;
+    // Live time/length of the playing deck and the finishing (previous) deck.
+    (window as any).__deckTimes = () => {
+      const a = audioRef.current;
+      const live = a ? { t: a.currentTime || 0, d: a.duration || 0 }
+        : { t: playerRef.current?.getCurrentTime() || 0, d: playerRef.current?.getDuration() || 0 };
+      const pa = prevAudioRef.current;
+      const td = tailRef.current ? deckRefs[tailRef.current.deck].current : null;
+      const tail = pa ? { t: pa.currentTime || 0, d: pa.duration || 0 }
+        : td ? { t: td.getCurrentTime() || 0, d: td.getDuration() || 0 } : null;
+      return { live, tail };
+    };
     (window as any).__globalAudioRef = audioRef;
     (window as any).__isUsingPipedAudio = () => usePipedAudio;
     return () => {
@@ -679,19 +1144,48 @@ export function GlobalAudioPlayer() {
     window.dispatchEvent(new CustomEvent("player-loading", { detail: isSearching }));
   }, [isSearching]);
 
-  if (!youtubeId || !showPlayer || usePipedAudio) return null;
+  useEffect(() => {
+    const decks = idleDecks();
+    if (preload && preload.deck !== activeDeck) decks[preload.deck] = { state: "ready", title: preload.title };
+    if (tail && tail.deck !== activeDeck) decks[tail.deck] = { state: "fading" };
+    decks[activeDeck] = { state: "live", title: currentTrack?.title };
+    lastDeckStatus = { active: activeDeck, tail: tail?.deck ?? null, activeTitle: currentTrack?.title, decks };
+    window.dispatchEvent(new CustomEvent("deck-status", { detail: lastDeckStatus }));
+  }, [activeDeck, tail, preload, currentTrack?.title]);
+
+  const activeId = !usePipedAudio && showPlayer ? youtubeId : null;
+  const deckId = (d: DeckName) =>
+    d === activeDeck ? activeId
+      : tail && tail.deck === d ? tail.id
+      : preload && preload.deck === d ? preload.id
+      : null;
+  const ids = DECKS.map((d) => [d, deckId(d)] as const);
+
+  if (!ids.some(([, id]) => id)) return null;
+
+  const renderDeck = (d: DeckName, id: string | null) => {
+    if (!id) return null;
+    const isActive = d === activeDeck && id === activeId;
+    const isTail = !isActive && tail?.deck === d;
+    const isPreload = !isActive && !isTail;
+    return (
+      <YouTubePlayer
+        key={d}
+        ref={deckRefs[d]}
+        videoId={id}
+        startSeconds={isActive ? resumeAtRef.current : 0}
+        isPlaying={isPreload ? false : isPlaying}
+        onProgress={isActive ? handleProgress : () => {}}
+        onEnd={isActive ? handleVideoEnd : isTail ? clearTail : () => {}}
+        onReady={() => console.log(`[GlobalAudioPlayer] Deck ${d} ready`)}
+        onError={isActive ? handlePlayerError : isTail ? clearTail : clearPreload}
+      />
+    );
+  };
+
   return (
     <div className="pointer-events-none fixed left-0 top-0 h-px w-px overflow-hidden opacity-0" aria-hidden="true">
-      <YouTubePlayer
-        ref={playerRef}
-        videoId={youtubeId}
-        startSeconds={resumeAtRef.current}
-        isPlaying={isPlaying}
-        onProgress={handleProgress}
-        onEnd={handleVideoEnd}
-        onReady={() => console.log("[GlobalAudioPlayer] Player ready")}
-        onError={handlePlayerError}
-      />
+      {ids.map(([d, id]) => renderDeck(d, id))}
     </div>
   );
 }

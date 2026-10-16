@@ -11,6 +11,7 @@ import { unlockMediaPlayback } from "@/lib/mediaUnlock";
 import DJPreferences, { loadDJPreferences, EditPreferencesButton } from "@/components/dj/DJPreferences";
 import type { DJPrefs } from "@/components/dj/DJPreferences";
 import { toTitleCase } from "@/utils/toTitleCase";
+import { useAutoMix } from "@/hooks/useAutoMix";
 import { supabase } from "@/integrations/supabase/client";
 
 const DJ_VOICES = [
@@ -68,6 +69,7 @@ async function speakDJ(text: string) {
 export default function AIDJ() {
   const navigate = useNavigate();
   const dj = useDJ();
+  const { autoMixEnabled, toggleAutoMix } = useAutoMix();
   const [request, setRequest] = useState("");
   const [showChat, setShowChat] = useState(false);
   const [showPrefs, setShowPrefs] = useState(false);
@@ -81,6 +83,14 @@ export default function AIDJ() {
   const isActive = dj.phase === "playing" || dj.phase === "commentary";
   const prefs = loadDJPreferences();
   const needsOnboarding = !prefs.setupComplete;
+
+  // When DJ becomes enabled, ensure AutoMix is on automatically
+  useEffect(() => {
+    if (dj.isEnabled && !autoMixEnabled) {
+      toggleAutoMix();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dj.isEnabled]);
 
   const lastSpokenRef = useRef("");
   useEffect(() => {

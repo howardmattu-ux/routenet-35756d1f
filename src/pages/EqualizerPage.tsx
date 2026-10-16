@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CrossfadeControls } from "@/components/player/CrossfadeControls";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, SkipBack, SkipForward, Pause, Play, Plus, RotateCcw } from "lucide-react";
@@ -52,6 +53,7 @@ export default function EqualizerPage() {
       </motion.header>
 
       <div className="px-5">
+        <CrossfadeControls />
         {/* Vertical EQ Sliders */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}

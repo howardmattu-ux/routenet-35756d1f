@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useCrossfade } from "@/lib/crossfadePrefs";
+import { Blend } from "lucide-react";
+import { DeckIndicator } from "@/components/player/DeckIndicator";
 import { Volume2, VolumeX, MonitorSpeaker, PanelRight, Maximize2, ArrowDownCircle, Heart, ListMusic, Loader2, Mic2, Pause, Play, Plus, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -28,6 +31,7 @@ export function DesktopPlayerBar() {
   const [volume, setVolume] = useState(() => getGlobalVolume());
   const changeVol = (v: number) => { setVolume(v); setGlobalVolume(v); };
   const [showPlaylistDialog, setShowPlaylistDialog] = useState(false);
+  const [xf, setXf] = useCrossfade();
   const [downloadStatus, setDownloadStatus] = useState<"idle" | "downloading" | "done" | "failed">("idle");
 
   useEffect(() => {
@@ -162,6 +166,20 @@ export function DesktopPlayerBar() {
             aria-label="Download"
           >
             {downloadStatus === "downloading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownCircle className="h-4 w-4" />}
+          </Button>
+          {xf.enabled && <DeckIndicator className="mx-1" />}
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("relative h-8 w-8", xf.enabled && "text-primary")}
+            onClick={() => { setXf({ enabled: !xf.enabled }); toast(xf.enabled ? "Crossfade off" : `Crossfade on · ${xf.seconds}s`); }}
+            onContextMenu={(e) => { e.preventDefault(); navigate("/equalizer"); }}
+            aria-label="Crossfade"
+            aria-pressed={xf.enabled}
+            title={xf.enabled ? `Crossfade ${xf.seconds}s (right-click for settings)` : "Crossfade off (right-click for settings)"}
+          >
+            <Blend className="h-4 w-4" />
+            {xf.enabled && <span className="absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary" />}
           </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/queue")} aria-label="Open queue"><ListMusic className="h-4 w-4" /></Button>
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast("Playing on this device")} aria-label="Connect to a device"><MonitorSpeaker className="h-4 w-4" /></Button>
