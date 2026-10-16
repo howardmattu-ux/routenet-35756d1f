@@ -1,0 +1,168 @@
+import { useCallback, useEffect, useState } from "react";
+import { useCrossfade } from "@/lib/crossfadePrefs";
+import { Blend } from "lucide-react";
+import { Volume2, VolumeX, MonitorSpeaker, PanelRight, Maximize2, ArrowDownCircle, Heart, ListMusic, Loader2, Mic2, Pause, Play, Plus, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { AddToPlaylistDialog } from "@/components/AddToPlaylistDialog";
+import { setGlobalVolume, getGlobalVolume, seekGlobalAudio } from "@/components/player/GlobalAudioPlayer";
+import { usePlayer } from "@/context/PlayerContext";
+import { cn } from "@/lib/utils";
+import { rightPanelPref } from "@/hooks/useUiPrefs";
+import { isDesktopViewport, toggleDesktopLyrics, useDesktopLyricsOpen } from "@/hooks/useDesktopLyrics";
+
+function formatTime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
+}
+
+export function DesktopPlayerBar() {
+  const navigate = useNavigate();
+  const {
+    currentTrack, isPlaying, togglePlay, next, previous, progress, duration,
+    seek, shuffle, toggleShuffle, repeat, toggleRepeat,
+  } = usePlayer();
+
+  const [liked, setLiked] = useState(false);
+  const lyricsOpen = useDesktopLyricsOpen();
+  const panelOpen = rightPanelPref.use() === "open";
+  const [volume, setVolume] = useState(() => getGlobalVolume());
+  const changeVol = (v: number) => { setVolume(v); setGlobalVolume(v); };
+  const [showPlaylistDialog, setShowPlaylistDialog] = useState(false);
+  const [xf, setXf] = useCrossfade();
+  const [downloadStatus, setDownloadStatus] = useState<"idle" | "downloading" | "done" | "failed">("idle");
+
+  useEffect(() => {
+    const compute = () => {
+      if (!currentTrack) return setLiked(false);
+      try {
+        const songs = JSON.parse(localStorage.getItem("tunestream_liked_songs") || "[]");
+        setLiked(songs.some((s: any) => s.title === currentTrack.title && s.artist === currentTrack.artist));
+      } catch { setLiked(false); }
+    };
+    compute();
+    window.addEventListener("liked-updated", compute);
+    return () => window.removeEventListener("liked-updated", compute);
+  }, [currentTrack?.title, currentTrack?.artist]);
+
+  useEffect(() => setDownloadStatus("idle"), [currentTrack?.id]);
+
+  const actualDuration = duration || currentTrack?.duration || 0;
+
+  const handleSeek = useCallback((value: number) => {
+    const ratio = value / 1000;
+    seek(ratio);
+    if (actualDuration > 0) seekGlobalAudio(ratio * actualDuration);
+  }, [seek, actualDuration]);
+
+  const toggleLike = useCallback(() => {
+    if (!currentTrack) return;
+    import("@/pages/Library").then(({ toggleLikedSong }) => setLiked(toggleLikedSong(currentTrack)));
+  }, [currentTrack]);
+
+  const handleDownload = useCallback(async () => {
+    if (!currentTrack || downloadStatus === "downloading") return;
+    setDownloadStatus("downloading");
+    const mod = await import("@/services/downloadService");
+    const ok = await mod.downloadTrack(currentTrack);
+    setDownloadStatus(ok ? "done" : "failed");
+    if (ok) toast.success("Downloaded to offline library");
+    else toast.error(mod.lastDownloadError || "Download failed");
+  }, [currentTrack, downloadStatus]);
+
+  if (!currentTrack) return null;
+
+  return (
+    <>
+      <footer className="hidden h-[72px] shrink-0 grid-cols-[minmax(240px,1fr)_minmax(340px,1.5fr)_minmax(240px,1fr)] items-stretch gap-2 bg-background px-2 pb-1 lg:grid">
+        <div className="flex min-w-0 items-center gap-3 rounded-lg px-2">
+          <button onClick={() => navigate("/now-playing")} className="flex min-w-0 items-center gap-3 text-left">
+            <img src={currentTrack.artwork || "/placeholder.svg"} alt="" onError={(e) => { if (!e.currentTarget.src.endsWith("/placeholder.svg")) e.currentTarget.src = "/placeholder.svg"; }} className="h-14 w-14 rounded object-cover" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold">{currentTrack.title}</span>
+              <span className="block truncate text-xs text-muted-foreground">{currentTrack.artist}</span>
+            </span>
+          </button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("h-8 w-8 shrink-0", liked ? "text-primary" : "text-muted-foreground")}
+            onClick={toggleLike}
+            aria-label={liked ? "Remove from liked songs" : "Like song"}
+            aria-pressed={liked}
+          >
+            <Heart className="h-4 w-4" fill={liked ? "currentColor" : "none"} />
+          </Button>
+        </div>
+
+        <div className="flex flex-col justify-center px-6">
+          <div className="mb-1 flex items-center justify-center gap-2">
+            <Button variant="ghost" size="icon" className={cn("h-8 w-8", shuffle && "text-primary")} onClick={toggleShuffle} aria-label="Shuffle"><Shuffle className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={previous} aria-label="Previous"><SkipBack className="h-4 w-4" fill="currentColor" /></Button>
+            <Button size="icon" className="h-8 w-8 rounded-full bg-foreground text-background hover:scale-105 hover:bg-foreground" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>{isPlaying ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}</Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={next} aria-label="Next"><SkipForward className="h-4 w-4" fill="currentColor" /></Button>
+            <Button variant="ghost" size="icon" className={cn("h-8 w-8", repeat !== "off" && "text-primary")} onClick={toggleRepeat} aria-label="Repeat">{repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}</Button>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] tabular-nums text-muted-foreground">
+            <span className="w-9 text-right">{formatTime(progress * actualDuration)}</span>
+            <input
+              aria-label="Playback position"
+              type="range"
+              min="0"
+              max="1000"
+              value={Math.round(progress * 1000)}
+              onChange={(e) => handleSeek(Number(e.target.value))}
+              className="h-1 w-full accent-primary"
+            />
+            <span className="w-9">{formatTime(actualDuration)}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-1 px-3 text-muted-foreground">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("h-8 w-8", lyricsOpen && "text-primary")}
+            onClick={() => (isDesktopViewport() ? toggleDesktopLyrics() : navigate("/lyrics"))}
+            aria-label="Lyrics"
+            aria-pressed={lyricsOpen}
+          >
+            <Mic2 className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowPlaylistDialog(true)} aria-label="Add to playlist"><Plus className="h-4 w-4" /></Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("h-8 w-8", downloadStatus === "done" && "text-primary")}
+            onClick={handleDownload}
+            aria-label="Download"
+          >
+            {downloadStatus === "downloading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownCircle className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("relative h-8 w-8", xf.enabled && "text-primary")}
+            onClick={() => { setXf({ enabled: !xf.enabled }); toast(xf.enabled ? "Crossfade off" : `Crossfade on · ${xf.seconds}s`); }}
+            onContextMenu={(e) => { e.preventDefault(); navigate("/equalizer"); }}
+            aria-label="Crossfade"
+            aria-pressed={xf.enabled}
+            title={xf.enabled ? `Crossfade ${xf.seconds}s (right-click for settings)` : "Crossfade off (right-click for settings)"}
+          >
+            <Blend className="h-4 w-4" />
+            {xf.enabled && <span className="absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary" />}
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/queue")} aria-label="Open queue"><ListMusic className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast("Playing on this device")} aria-label="Connect to a device"><MonitorSpeaker className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => changeVol(volume > 0 ? 0 : 0.8)} aria-label="Mute">{volume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button>
+          <input aria-label="Volume" type="range" min="0" max="100" value={Math.round(volume * 100)} onChange={(e) => changeVol(Number(e.target.value) / 100)} className="h-1 w-24 accent-primary" />
+          <Button variant="ghost" size="icon" className={cn("hidden h-8 w-8 xl:inline-flex", panelOpen && "text-primary")} onClick={() => rightPanelPref.set(panelOpen ? "closed" : "open")} aria-label="Now playing view"><PanelRight className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/now-playing")} aria-label="Full screen"><Maximize2 className="h-4 w-4" /></Button>
+        </div>
+      </footer>
+
+      <AddToPlaylistDialog isOpen={showPlaylistDialog} onClose={() => setShowPlaylistDialog(false)} track={currentTrack} />
+    </>
+  );
+}

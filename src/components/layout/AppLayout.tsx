@@ -1,0 +1,77 @@
+import { ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { rightPanelPref } from "@/hooks/useUiPrefs";
+import { useLocation } from "react-router-dom";
+import { BottomNav } from "./BottomNav";
+import { MiniPlayer } from "./MiniPlayer";
+import { GlobalAudioPlayer } from "@/components/player/GlobalAudioPlayer";
+import { DesktopSidebar } from "./DesktopSidebar";
+import { DesktopTopBar } from "./DesktopTopBar";
+import { DesktopNowPlayingPanel } from "./DesktopNowPlayingPanel";
+import { DesktopPlayerBar } from "./DesktopPlayerBar";
+import { DesktopLyricsPanel } from "@/components/nowplaying/DesktopLyricsPanel";
+
+import { usePlayer } from "@/context/PlayerContext";
+import { useDJBridge } from "@/hooks/useDJBridge";
+import { useMediaSession } from "@/hooks/useMediaSession";
+import { useEffect } from "react";
+import { setDesktopLyricsOpen, useDesktopLyricsOpen } from "@/hooks/useDesktopLyrics";
+
+interface AppLayoutProps {
+  children: ReactNode;
+}
+
+export function AppLayout({ children }: AppLayoutProps) {
+  const { currentTrack } = usePlayer();
+  const location = useLocation();
+  const lyricsOpen = useDesktopLyricsOpen();
+  const panelOpen = rightPanelPref.use() === "open";
+  
+  useDJBridge();
+  useMediaSession();
+
+  // Navigating anywhere closes the inline desktop lyrics view.
+  useEffect(() => {
+    if (location.pathname !== "/now-playing" && location.pathname !== "/lyrics") sessionStorage.setItem("routenet_last_page", location.pathname + location.search);
+  }, [location.pathname, location.search]);
+  useEffect(() => { setDesktopLyricsOpen(false); }, [location.pathname, location.search]);
+
+  const hideChrome = location.pathname === "/lyrics";
+  const hideMiniplayer = hideChrome || location.pathname === "/now-playing" || location.pathname === "/ai-dj" || location.pathname === "/radio";
+  
+  return (
+    <div className="relative flex min-h-screen flex-col overflow-x-hidden lg:h-screen lg:overflow-hidden lg:bg-background">
+      <GlobalAudioPlayer />
+      {!hideChrome && <DesktopTopBar />}
+      <div className="flex min-h-0 flex-1 lg:gap-2 lg:px-2 lg:pb-2">
+        {!hideChrome && <DesktopSidebar />}
+        <div className="flex min-w-0 flex-1 flex-col lg:overflow-hidden lg:rounded-lg lg:bg-background-elevated">
+          <main className={`custom-scrollbar relative min-h-0 flex-1 lg:overflow-y-auto ${currentTrack && !hideMiniplayer ? "pb-28 lg:pb-0" : "pb-14 lg:pb-0"}`}>
+            {lyricsOpen ? (
+              <>
+                <div className="hidden h-full lg:block"><DesktopLyricsPanel /></div>
+                <div className="lg:hidden">{children}</div>
+              </>
+            ) : (
+              children
+            )}
+          </main>
+        </div>
+        {!hideChrome && (
+          <button
+            onClick={() => rightPanelPref.set(panelOpen ? "closed" : "open")}
+            aria-label={panelOpen ? "Hide side panel" : "Show side panel"}
+            className="hidden w-5 shrink-0 items-center justify-center self-center rounded-full bg-background-elevated py-6 text-muted-foreground transition-colors hover:text-foreground xl:flex"
+          >
+            {panelOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </button>
+        )}
+        {!hideChrome && <DesktopNowPlayingPanel />}
+      </div>
+      
+      {!hideMiniplayer && <div className="lg:hidden"><MiniPlayer /></div>}
+      {!hideChrome && <div className="lg:hidden"><BottomNav /></div>}
+      {!hideChrome && <DesktopPlayerBar />}
+    </div>
+  );
+}
