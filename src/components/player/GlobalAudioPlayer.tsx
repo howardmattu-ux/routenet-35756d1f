@@ -1019,10 +1019,6 @@ export function GlobalAudioPlayer() {
         deckHandoffTrackRef.current = null;
         activeDeckRef.current = nd; setActiveDeck(nd);
         setYoutubeId(null);
-      } else if (false) {
-        const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
-        tailRef.current = t;
-        setTail(t);
       }
       setIsSearching(true);
       next();
