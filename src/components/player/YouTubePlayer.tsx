@@ -274,11 +274,18 @@ export const YouTubePlayer = forwardRef<YouTubePlayerRef, YouTubePlayerProps>(
             if (isPlayingRef.current) {
               playerRef.current?.playVideo();
               startProgressTracking();
+            } else {
+              // Pre-warmed deck: stay cued and silent until triggered.
+              try { playerRef.current?.pauseVideo(); } catch {}
             }
           },
           onStateChange: (event: YTPlayerEvent) => {
             onStateChangeRef.current?.(event.data);
 
+            if (event.data === window.YT.PlayerState.PLAYING && !isPlayingRef.current) {
+              try { playerRef.current?.pauseVideo(); } catch {}
+              return;
+            }
             if (event.data === window.YT.PlayerState.PLAYING) {
               startProgressTracking();
             } else if (event.data === window.YT.PlayerState.PAUSED ||

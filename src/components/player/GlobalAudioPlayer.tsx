@@ -111,7 +111,7 @@ export function getDeckStatus() { return lastDeckStatus; }
 
 export function GlobalAudioPlayer() {
   const {
-    currentTrack, isPlaying, setProgress, next, repeat, queue, pause,
+    currentTrack, isPlaying, setProgress, next, repeat, queue, pause, nextTrack,
   } = usePlayer();
 
   const [youtubeId, setYoutubeId] = useState<string | null>(null);
@@ -164,6 +164,47 @@ export function GlobalAudioPlayer() {
   // Set when crossfade fired; consumed by the next track's load to fade in.
   const pendingFadeInRef = useRef(false);
   const fadeInIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  // Pre-warmed deck: the next queued song is loaded (paused, silent) on its
+  // own deck so the crossfade trigger can start it instantly.
+  type Preload = { deck: DeckName; id: string; trackId: string };
+  const [preload, setPreload] = useState<Preload | null>(null);
+  const preloadRef = useRef<Preload | null>(null);
+  const deckHandoffTrackRef = useRef<string | null>(null);
+  const triggerCrossfadeRef = useRef<() => void>(() => {});
+  const clearPreload = useCallback(() => {
+    preloadRef.current = null;
+    setPreload(null);
+  }, []);
+
+  useEffect(() => {
+    if (!isAutoMixEnabled() || !currentTrack || !nextTrack || nextTrack.id === currentTrack.id) {
+      if (preloadRef.current) clearPreload();
+      return;
+    }
+    if (preloadRef.current?.trackId === nextTrack.id) return;
+    let cancelled = false;
+    (async () => {
+      let id = nextTrack.youtubeId || getCachedYouTubeId(nextTrack.title, nextTrack.artist) || null;
+      if (!id) {
+        try { id = await searchYouTubeForTrack(nextTrack); } catch { id = null; }
+      }
+      if (cancelled || !id) return;
+      cacheYouTubeId(nextTrack.title, nextTrack.artist, id);
+      nextTrack.youtubeId = id;
+      const busy = new Set<DeckName>([activeDeckRef.current]);
+      if (tailRef.current) busy.add(tailRef.current.deck);
+      let deck = activeDeckRef.current;
+      for (let i = 1; i <= DECKS.length; i++) {
+        const d = DECKS[(DECKS.indexOf(activeDeckRef.current) + i) % DECKS.length];
+        if (!busy.has(d)) { deck = d; break; }
+      }
+      const p = { deck, id, trackId: nextTrack.id };
+      preloadRef.current = p;
+      setPreload(p);
+    })();
+    return () => { cancelled = true; };
+  }, [currentTrack?.id, nextTrack?.id, clearPreload]);
 
   useEffect(() => {
     preloadYouTubeAPI();
@@ -544,16 +585,7 @@ export function GlobalAudioPlayer() {
               !crossfadeTriggeredRef.current &&
               !hasEndedRef.current
             ) {
-              // Inline crossfade trigger (avoids stale closure on usePipedAudio)
-              if ((window as any).__djEnabled !== true && repeat !== "one") {
-                crossfadeTriggeredRef.current = true;
-                pendingFadeInRef.current = true;
-                // Move outgoing audio aside so the next track can attach
-                // without truncating the current song. The element keeps
-                // playing while fading out over the crossfade window.
-                beginPrevFadeOut();
-                setTimeout(() => { next(); }, 50);
-              }
+              triggerCrossfadeRef.current();
             }
           }
         }
@@ -625,7 +657,7 @@ export function GlobalAudioPlayer() {
       handoffRef.current = true;
       // Dual-deck: if song 1 is on a YouTube deck, keep that deck playing
       // as the "tail" and send song 2 to the other deck.
-      if (!usePipedAudio && showPlayer && youtubeId) {
+      if (deckHandoffTrackRef.current !== currentTrack?.id && !usePipedAudio && showPlayer && youtubeId) {
         const old = activeDeckRef.current;
         const nextDeck = DECKS[(DECKS.indexOf(old) + 1) % DECKS.length];
         const t = { id: youtubeId, deck: old };
@@ -689,11 +721,20 @@ export function GlobalAudioPlayer() {
     const requestToken = ++searchTokenRef.current;
     const switched = activeTrackIdRef.current !== (track?.id ?? null);
     activeTrackIdRef.current = track?.id ?? null;
+    // Deck handover already started this song on its own pre-warmed deck.
+    if (track && deckHandoffTrackRef.current === track.id) {
+      deckHandoffTrackRef.current = null;
+      handoffRef.current = false;
+      setIsSearching(false);
+      return;
+    }
+    deckHandoffTrackRef.current = null;
     // Stop the previous song right away so skips feel instant
     // (unless an automatic crossfade is handing over).
     const handoff = pendingFadeInRef.current || handoffRef.current;
     handoffRef.current = false;
     if (track && switched && !handoff) {
+      clearPreload();
       stopPrevAudio();
       if (audioRef.current) {
         try { audioRef.current.pause(); } catch {}
@@ -850,21 +891,35 @@ export function GlobalAudioPlayer() {
   const triggerCrossfade = useCallback(() => {
     if (crossfadeTriggeredRef.current || hasEndedRef.current) return;
     if (repeat === "one") return;
-    const djEnabled = (window as any).__djEnabled === true;
-    if (djEnabled) return; // DJ manages its own transitions
-
+    if ((window as any).__djEnabled === true) return;
+    const p = preloadRef.current;
+    // No pre-warmed deck ready → never skip: let the song play to its
+    // natural end and hand over normally.
+    if (!p || !nextTrack || p.trackId !== nextTrack.id || useNativeAudio) return;
     crossfadeTriggeredRef.current = true;
     pendingFadeInRef.current = true;
+    deckHandoffTrackRef.current = p.trackId;
 
-    // If using Piped audio, move the outgoing audio aside so it can keep
-    // playing while fading out — the new track will attach to audioRef.
+    // Outgoing song keeps playing on its own deck / audio element.
     if (audioRef.current && usePipedAudio) {
       beginPrevFadeOut();
+      setUsePipedAudio(false);
+    } else if (showPlayer && youtubeIdRef.current) {
+      const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
+      tailRef.current = t;
+      setTail(t);
     }
-
-    // Kick off the next track immediately so it overlaps the tail
-    setTimeout(() => { next(); }, 50);
-  }, [next, repeat, usePipedAudio, beginPrevFadeOut]);
+    try { deckRefs[p.deck].current?.setVolume?.(0); } catch {}
+    preloadRef.current = null;
+    setPreload(null);
+    activeDeckRef.current = p.deck;
+    setActiveDeck(p.deck);
+    resumeAtRef.current = 0;
+    setYoutubeId(p.id);
+    setShowPlayer(true);
+    next();
+  }, [next, nextTrack, repeat, usePipedAudio, useNativeAudio, showPlayer, beginPrevFadeOut]);
+  triggerCrossfadeRef.current = triggerCrossfade;
 
   const handleProgress = useCallback(
     (currentTime: number, duration: number) => {
@@ -929,25 +984,30 @@ export function GlobalAudioPlayer() {
 
   const activeId = !usePipedAudio && showPlayer ? youtubeId : null;
   const deckId = (d: DeckName) =>
-    d === activeDeck ? activeId : tail && tail.deck === d ? tail.id : null;
+    d === activeDeck ? activeId
+      : tail && tail.deck === d ? tail.id
+      : preload && preload.deck === d ? preload.id
+      : null;
   const ids = DECKS.map((d) => [d, deckId(d)] as const);
 
   if (!ids.some(([, id]) => id)) return null;
 
   const renderDeck = (d: DeckName, id: string | null) => {
     if (!id) return null;
-    const isActive = d === activeDeck;
+    const isActive = d === activeDeck && id === activeId;
+    const isTail = !isActive && tail?.deck === d;
+    const isPreload = !isActive && !isTail;
     return (
       <YouTubePlayer
         key={d}
         ref={deckRefs[d]}
         videoId={id}
         startSeconds={isActive ? resumeAtRef.current : 0}
-        isPlaying={isPlaying}
+        isPlaying={isPreload ? false : isPlaying}
         onProgress={isActive ? handleProgress : () => {}}
-        onEnd={isActive ? handleVideoEnd : clearTail}
+        onEnd={isActive ? handleVideoEnd : isTail ? clearTail : () => {}}
         onReady={() => console.log(`[GlobalAudioPlayer] Deck ${d} ready`)}
-        onError={isActive ? handlePlayerError : clearTail}
+        onError={isActive ? handlePlayerError : isTail ? clearTail : clearPreload}
       />
     );
   };
