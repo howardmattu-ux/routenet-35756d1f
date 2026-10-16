@@ -679,8 +679,12 @@ export function GlobalAudioPlayer() {
     if (!usePipedAudio || !audioRef.current) return;
     if (isPlaying) {
       audioRef.current.play().catch(() => {});
+      // Keep the outgoing crossfade tail in sync with play/pause so both
+      // decks share one transport control.
+      if (prevAudioRef.current && !prevFadeOutRef.current) prevAudioRef.current.play().catch(() => {});
     } else {
       audioRef.current.pause();
+      if (prevAudioRef.current && !prevFadeOutRef.current) prevAudioRef.current.pause();
     }
   }, [isPlaying, usePipedAudio, useNativeAudio, currentTrack?.id]);
 
