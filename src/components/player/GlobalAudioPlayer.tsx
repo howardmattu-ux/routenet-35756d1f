@@ -994,9 +994,27 @@ export function GlobalAudioPlayer() {
     if (repeat === "one") return;
     if ((window as any).__djEnabled === true) return;
     const p = preloadRef.current;
-    // No pre-warmed deck ready → never skip: let the song play to its
-    // natural end and hand over normally.
-    if (!p || !nextTrack || p.trackId !== nextTrack.id || useNativeAudio) return;
+    if (!nextTrack || useNativeAudio) return;
+    // Next song not pre-loaded yet: still start it NOW on a fresh player while
+    // the current song keeps playing untouched to its own natural end.
+    if (!p || p.trackId !== nextTrack.id) {
+      crossfadeTriggeredRef.current = true;
+      pendingFadeInRef.current = true;
+      if (audioRef.current && usePipedAudio) {
+        beginPrevFadeOut();
+        startPrevFade();
+        const t = { id: "", deck: activeDeckRef.current };
+        tailRef.current = t;
+        setTail(t);
+      } else if (showPlayer && youtubeIdRef.current) {
+        const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
+        tailRef.current = t;
+        setTail(t);
+      }
+      setIsSearching(true);
+      next();
+      return;
+    }
     crossfadeTriggeredRef.current = true;
     pendingFadeInRef.current = true;
     deckHandoffTrackRef.current = p.trackId;
