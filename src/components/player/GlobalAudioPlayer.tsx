@@ -1080,6 +1080,17 @@ export function GlobalAudioPlayer() {
 
   useEffect(() => {
     (window as any).__globalAudioPlayerRef = playerRef;
+    // Live time/length of the playing deck and the finishing (previous) deck.
+    (window as any).__deckTimes = () => {
+      const a = audioRef.current;
+      const live = a ? { t: a.currentTime || 0, d: a.duration || 0 }
+        : { t: playerRef.current?.getCurrentTime() || 0, d: playerRef.current?.getDuration() || 0 };
+      const pa = prevAudioRef.current;
+      const td = tailRef.current ? deckRefs[tailRef.current.deck].current : null;
+      const tail = pa ? { t: pa.currentTime || 0, d: pa.duration || 0 }
+        : td ? { t: td.getCurrentTime() || 0, d: td.getDuration() || 0 } : null;
+      return { live, tail };
+    };
     (window as any).__globalAudioRef = audioRef;
     (window as any).__isUsingPipedAudio = () => usePipedAudio;
     return () => {
