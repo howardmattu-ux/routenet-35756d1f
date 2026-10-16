@@ -105,8 +105,15 @@ function proactiveCacheLikedSongs() {
 
 export type DeckName = "A" | "B" | "C" | "D";
 export const DECKS: DeckName[] = ["A", "B", "C", "D"];
-export type DeckStatus = { active: DeckName; tail: DeckName | null; activeTitle?: string };
-let lastDeckStatus: DeckStatus = { active: "A", tail: null };
+export type DeckInfo = { state: "live" | "fading" | "ready" | "idle"; title?: string };
+export type DeckStatus = {
+  active: DeckName;
+  tail: DeckName | null;
+  activeTitle?: string;
+  decks: Record<DeckName, DeckInfo>;
+};
+const idleDecks = (): Record<DeckName, DeckInfo> => ({ A: { state: "idle" }, B: { state: "idle" }, C: { state: "idle" }, D: { state: "idle" } });
+let lastDeckStatus: DeckStatus = { active: "A", tail: null, decks: idleDecks() };
 export function getDeckStatus() { return lastDeckStatus; }
 
 export function GlobalAudioPlayer() {
@@ -158,6 +165,17 @@ export function GlobalAudioPlayer() {
   // Position (seconds) the iframe should resume from after a stream failover.
   const resumeAtRef = useRef(0);
   const hasEndedRef = useRef(false); // Prevent double-fire of track end
+  // Live mirror of the queue so callbacks (which must not re-run per queue
+  // change) can still compute a track's assigned deck.
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  // Round-robin: the Nth song of the queue always lives on deck N % 4.
+  const deckOfIndex = useCallback((i: number): DeckName => DECKS[((i % DECKS.length) + DECKS.length) % DECKS.length], []);
+  const deckOfTrack = useCallback((track?: Track | null): DeckName | null => {
+    if (!track) return null;
+    const i = queueRef.current.findIndex((t) => t.id === track.id);
+    return i >= 0 ? deckOfIndex(i) : null;
+  }, [deckOfIndex]);
 
   const crossfadeTriggeredRef = useRef(false);
   const crossfadeFadeRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -165,14 +183,19 @@ export function GlobalAudioPlayer() {
   const pendingFadeInRef = useRef(false);
   const fadeInIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
-  // Pre-warmed deck: the next queued song is loaded (paused, silent) on its
-  // own deck so the crossfade trigger can start it instantly.
-  type Preload = { deck: DeckName; id: string; trackId: string };
+  // Pre-warmed deck: the next queued song is assigned its own deck and
+  // buffered there (paused, silent) so the crossfade trigger — or the Next
+  // button — can start it from that deck instantly, with zero re-resolve.
+  type Preload = { deck: DeckName; id: string; trackId: string; title?: string; audio: HTMLAudioElement | null };
   const [preload, setPreload] = useState<Preload | null>(null);
   const preloadRef = useRef<Preload | null>(null);
   const deckHandoffTrackRef = useRef<string | null>(null);
   const triggerCrossfadeRef = useRef<() => void>(() => {});
   const clearPreload = useCallback(() => {
+    const p = preloadRef.current;
+    if (p?.audio) {
+      try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch {}
+    }
     preloadRef.current = null;
     setPreload(null);
   }, []);
