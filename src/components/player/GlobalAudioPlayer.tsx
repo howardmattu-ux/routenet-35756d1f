@@ -830,7 +830,8 @@ export function GlobalAudioPlayer() {
     // Each song owns its deck: Next moves forward, Back moves backward.
     if (track && switched) {
       const d = deckOfTrack(track);
-      if (d && d !== activeDeckRef.current) {
+      // Never take over the deck that is still finishing the previous song.
+      if (d && d !== activeDeckRef.current && d !== tailRef.current?.deck) {
         activeDeckRef.current = d;
         setActiveDeck(d);
       }
@@ -1010,6 +1011,15 @@ export function GlobalAudioPlayer() {
         tailRef.current = t;
         setTail(t);
       } else if (showPlayer && youtubeIdRef.current) {
+        // Finishing song keeps its own player; the new song gets the next one.
+        const old = activeDeckRef.current;
+        const nd = DECKS[(DECKS.indexOf(old) + 1) % DECKS.length];
+        const t = { id: youtubeIdRef.current, deck: old };
+        tailRef.current = t; setTail(t);
+        deckHandoffTrackRef.current = null;
+        activeDeckRef.current = nd; setActiveDeck(nd);
+        setYoutubeId(null);
+      } else if (false) {
         const t = { id: youtubeIdRef.current, deck: activeDeckRef.current };
         tailRef.current = t;
         setTail(t);
