@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useCrossfade } from "@/lib/crossfadePrefs";
 import { Blend } from "lucide-react";
+import { DeckIndicator } from "@/components/player/DeckIndicator";
 import { Volume2, VolumeX, MonitorSpeaker, PanelRight, Maximize2, ArrowDownCircle, Heart, ListMusic, Loader2, Mic2, Pause, Play, Plus, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -140,6 +141,7 @@ export function DesktopPlayerBar() {
           >
             {downloadStatus === "downloading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownCircle className="h-4 w-4" />}
           </Button>
+          {xf.enabled && <DeckIndicator className="mx-1" />}
           <Button
             variant="ghost"
             size="icon"

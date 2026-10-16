@@ -103,6 +103,12 @@ function proactiveCacheLikedSongs() {
   } catch {}
 }
 
+export type DeckName = "A" | "B" | "C" | "D";
+export const DECKS: DeckName[] = ["A", "B", "C", "D"];
+export type DeckStatus = { active: DeckName; tail: DeckName | null; activeTitle?: string };
+let lastDeckStatus: DeckStatus = { active: "A", tail: null };
+export function getDeckStatus() { return lastDeckStatus; }
+
 export function GlobalAudioPlayer() {
   const {
     currentTrack, isPlaying, setProgress, next, repeat, queue, pause,
@@ -116,11 +122,13 @@ export function GlobalAudioPlayer() {
   // Dual decks: two YouTube players so song 1 keeps playing while song 2 starts.
   const deckARef = useRef<YouTubePlayerRef>(null);
   const deckBRef = useRef<YouTubePlayerRef>(null);
-  const deckRefs = { A: deckARef, B: deckBRef } as const;
-  const [activeDeck, setActiveDeck] = useState<"A" | "B">("A");
-  const activeDeckRef = useRef<"A" | "B">("A");
-  const [tail, setTail] = useState<{ id: string; deck: "A" | "B" } | null>(null);
-  const tailRef = useRef<{ id: string; deck: "A" | "B" } | null>(null);
+  const deckCRef = useRef<YouTubePlayerRef>(null);
+  const deckDRef = useRef<YouTubePlayerRef>(null);
+  const deckRefs = { A: deckARef, B: deckBRef, C: deckCRef, D: deckDRef } as const;
+  const [activeDeck, setActiveDeck] = useState<DeckName>("A");
+  const activeDeckRef = useRef<DeckName>("A");
+  const [tail, setTail] = useState<{ id: string; deck: DeckName } | null>(null);
+  const tailRef = useRef<{ id: string; deck: DeckName } | null>(null);
   const tailFadeRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const handoffRef = useRef(false);
   const youtubeIdRef = useRef<string | null>(null);
@@ -128,7 +136,7 @@ export function GlobalAudioPlayer() {
   // playerRef always points at the active deck.
   const playerRef = useRef({
     get current(): YouTubePlayerRef | null {
-      return (activeDeckRef.current === "A" ? deckARef : deckBRef).current;
+      return deckRefs[activeDeckRef.current].current;
     },
   }).current as React.RefObject<YouTubePlayerRef>;
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -619,7 +627,7 @@ export function GlobalAudioPlayer() {
       // as the "tail" and send song 2 to the other deck.
       if (!usePipedAudio && showPlayer && youtubeId) {
         const old = activeDeckRef.current;
-        const nextDeck = old === "A" ? "B" : "A";
+        const nextDeck = DECKS[(DECKS.indexOf(old) + 1) % DECKS.length];
         const t = { id: youtubeId, deck: old };
         tailRef.current = t;
         setTail(t);
@@ -914,15 +922,19 @@ export function GlobalAudioPlayer() {
     return () => stopBackgroundKeepAlive();
   }, [isPlaying, youtubeId, usePipedAudio, useNativeAudio]);
 
+  useEffect(() => {
+    lastDeckStatus = { active: activeDeck, tail: tail?.deck ?? null, activeTitle: currentTrack?.title };
+    window.dispatchEvent(new CustomEvent("deck-status", { detail: lastDeckStatus }));
+  }, [activeDeck, tail, currentTrack?.title]);
+
   const activeId = !usePipedAudio && showPlayer ? youtubeId : null;
-  const deckId = (d: "A" | "B") =>
+  const deckId = (d: DeckName) =>
     d === activeDeck ? activeId : tail && tail.deck === d ? tail.id : null;
-  const idA = deckId("A");
-  const idB = deckId("B");
+  const ids = DECKS.map((d) => [d, deckId(d)] as const);
 
-  if (!idA && !idB) return null;
+  if (!ids.some(([, id]) => id)) return null;
 
-  const renderDeck = (d: "A" | "B", id: string | null) => {
+  const renderDeck = (d: DeckName, id: string | null) => {
     if (!id) return null;
     const isActive = d === activeDeck;
     return (
@@ -942,8 +954,7 @@ export function GlobalAudioPlayer() {
 
   return (
     <div className="pointer-events-none fixed left-0 top-0 h-px w-px overflow-hidden opacity-0" aria-hidden="true">
-      {renderDeck("A", idA)}
-      {renderDeck("B", idB)}
+      {ids.map(([d, id]) => renderDeck(d, id))}
     </div>
   );
 }
