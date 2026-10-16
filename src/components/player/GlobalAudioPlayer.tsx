@@ -1144,16 +1144,6 @@ export function seekGlobalAudio(seconds: number) {
   }
 }
 
-/** Total length (seconds) of whatever is currently playing. */
-export function getGlobalDuration(): number {
-  const isPiped = (window as any).__isUsingPipedAudio?.();
-  if (isPiped) {
-    const audio = (window as any).__globalAudioRef?.current as HTMLAudioElement | null;
-    const d = audio?.duration || 0;
-    return Number.isFinite(d) ? d : 0;
-  }
-  return getGlobalPlayerRef()?.getDuration() || 0;
-}
 
 export function getGlobalCurrentTime(): number {
   const isPiped = (window as any).__isUsingPipedAudio?.();
