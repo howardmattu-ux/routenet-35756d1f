@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { CrossfadeControls } from "@/components/player/CrossfadeControls";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import {
@@ -65,7 +64,6 @@ type SubPage =
 interface Prefs {
   audioQuality: "auto" | "normal" | "high" | "lossless";
   downloadQuality: "normal" | "high" | "lossless";
-  crossfade: number;
   gapless: boolean;
   normalize: boolean;
   dataSaver: boolean;
@@ -87,7 +85,6 @@ interface Prefs {
 const DEFAULTS: Prefs = {
   audioQuality: "high",
   downloadQuality: "high",
-  crossfade: 0,
   gapless: true,
   normalize: true,
   dataSaver: false,
@@ -274,7 +271,7 @@ export default function Settings() {
 
                 <Group>
                   <Row icon={User} label="Account" desc="Profile, subscription, security" onClick={() => setSubPage("account")} />
-                  <Row icon={Volume2} label="Playback" desc="Audio quality, crossfade, EQ" onClick={() => setSubPage("playback")} />
+                  <Row icon={Volume2} label="Playback" desc="Audio quality and EQ" onClick={() => setSubPage("playback")} />
                   <Row icon={Sparkles} label="AI & Recommendations" desc="Tune what Routenet learns" onClick={() => setSubPage("ai")} />
                   <Row icon={Download} label="Downloads" desc="Storage, quality, offline mode" onClick={() => setSubPage("downloads")} />
                   <Row icon={Bell} label="Notifications" desc="Releases, artists, friends" onClick={() => setSubPage("notifications")} />
@@ -335,7 +332,6 @@ export default function Settings() {
                   ))}
                 </Group>
                 <Group title="Player">
-                  <div className="px-2 pb-3"><CrossfadeControls /></div>
                   <Row
                     icon={Music2}
                     label="Gapless playback"

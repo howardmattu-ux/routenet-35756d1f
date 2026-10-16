@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Check, RotateCcw, Sliders } from "lucide-react";
-import { CrossfadeControls } from "@/components/player/CrossfadeControls";
 import { Slider } from "@/components/ui/slider";
 
 interface EqualizerProps {
@@ -71,7 +70,6 @@ export function Equalizer({ isOpen, onClose }: EqualizerProps) {
           >
             <div className="mx-auto mb-4 h-1 w-12 rounded-full bg-muted" />
 
-            <div className="mb-4"><CrossfadeControls /></div>
             {/* Header */}
             <div className="mb-6 flex items-center justify-between">
               <div className="flex items-center gap-3">
