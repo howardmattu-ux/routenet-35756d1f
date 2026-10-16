@@ -20,9 +20,9 @@ export function DesktopNowPlayingPanel() {
 
   if (panelOpen !== "open") return null;
   return (
-    <aside className="custom-scrollbar hidden h-full min-h-0 w-[320px] shrink-0 overflow-y-auto rounded-md border-0 bg-background-elevated p-4 outline-none xl:block 2xl:w-[360px]">
+    <aside className="custom-scrollbar hidden h-full min-h-0 w-[320px] shrink-0 overflow-y-auto rounded-lg border-0 bg-card p-4 outline-none xl:block 2xl:w-[360px]">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold text-foreground">Now playing</h2>
+        <h2 className="truncate text-base font-bold text-foreground">{currentTrack?.album || "Now playing"}</h2>
         <div className="flex items-center gap-1">
         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleHidden} aria-pressed={hidden} aria-label={hidden ? "Show queue" : "Hide queue"}>
           {hidden ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
@@ -49,7 +49,7 @@ export function DesktopNowPlayingPanel() {
       ) : currentTrack ? (
         <>
           {/* 16:9 video card — the song's canvas video plays here, artwork shows until it starts */}
-          <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-secondary shadow-lg">
+          <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-secondary shadow-lg">
             <VideoCanvas
               trackId={currentTrack.id}
               artwork={currentTrack.artwork || ""}
@@ -64,10 +64,10 @@ export function DesktopNowPlayingPanel() {
           </div>
           <AboutArtistCard artist={currentTrack.artist} />
 
-          <div className="mt-5 pt-1">
+          <div className="mt-5 rounded-lg bg-secondary p-4">
             <div className="mb-2 flex items-center justify-between">
-              <span className="flex items-center gap-2 text-xs font-bold text-muted-foreground"><ListMusic className="h-4 w-4" /> Up next</span>
-              <button onClick={() => navigate("/queue")} className="text-[11px] font-semibold text-muted-foreground hover:text-foreground">Queue</button>
+              <span className="flex items-center gap-2 text-xs font-bold text-muted-foreground"><ListMusic className="h-4 w-4" /> Next in queue</span>
+              <button onClick={() => navigate("/queue")} className="text-[11px] font-semibold text-muted-foreground hover:text-foreground">Open queue</button>
             </div>
 
             {upNext.length ? (
