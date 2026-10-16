@@ -816,7 +816,7 @@ export function GlobalAudioPlayer() {
     if (track && deckHandoffTrackRef.current === track.id) {
       deckHandoffTrackRef.current = null;
       handoffRef.current = false;
-      setIsSearching(false);
+      // Loading clears once the incoming deck actually starts playing.
       return;
     }
     deckHandoffTrackRef.current = null;
