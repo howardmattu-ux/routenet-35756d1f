@@ -28,6 +28,8 @@ const youtubeIdCache = new Map<string, string>();
 // Only active when AutoMix is explicitly enabled — otherwise tracks play
 // in full with a hard cut between them (no fade, no truncation).
 const CROSSFADE_FADE_INTERVAL_MS = 100;
+// Volume fading in/out caused songs to freeze — kept off.
+const FADING_DISABLED = true;
 function xfMs() { return getCrossfade().seconds * 1000; }
 function isAutoMixEnabled(): boolean { return getCrossfade().enabled; }
 // Equal-power curves so the overlap sounds smooth (no volume dip mid-fade).
@@ -801,6 +803,14 @@ export function GlobalAudioPlayer() {
     // (unless an automatic crossfade is handing over).
     const handoff = pendingFadeInRef.current || handoffRef.current;
     handoffRef.current = false;
+    // Each song owns its deck: Next moves forward, Back moves backward.
+    if (track && switched) {
+      const d = deckOfTrack(track);
+      if (d && d !== activeDeckRef.current) {
+        activeDeckRef.current = d;
+        setActiveDeck(d);
+      }
+    }
     if (track && switched && !handoff) {
       clearPreload();
       stopPrevAudio();
@@ -957,6 +967,9 @@ export function GlobalAudioPlayer() {
   }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, currentTrack?.youtubeId, next, stopPipedAudio, tryPlayWithPiped]);
 
   const triggerCrossfade = useCallback(() => {
+    // Fading disabled: songs play fully at normal volume, then the next
+    // song starts on its own deck when the current one ends.
+    if (FADING_DISABLED) return;
     if (crossfadeTriggeredRef.current || hasEndedRef.current) return;
     if (repeat === "one") return;
     if ((window as any).__djEnabled === true) return;
