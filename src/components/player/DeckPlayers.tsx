@@ -73,7 +73,7 @@ export function DeckPlayers() {
           </div>
           <p className="truncate text-xs text-foreground">{r.title}</p>
           <p className={cn("mb-1 text-[10px]", r.on ? "text-primary" : "text-muted-foreground")}>{r.label}</p>
-          {r.on && <Bar time={r.time} loading={r.loading} />}
+          {r.time && <Bar time={r.time} loading={r.loading} />}
         </div>
       ))}
     </div>
