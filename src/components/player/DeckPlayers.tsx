@@ -50,10 +50,15 @@ export function DeckPlayers() {
 
   const idx = queue.findIndex((t) => t.id === currentTrack?.id);
   const overlap = !!s.tail && s.tail !== s.active && idx > 0;
-  const rows: { n: number; title: string; time: T | null; loading?: boolean; on: boolean }[] = [];
-  if (overlap) rows.push({ n: idx, title: queue[idx - 1]?.title ?? "—", time: times.tail, on: true });
-  if (idx >= 0) rows.push({ n: idx + 1, title: queue[idx].title, time: times.live, loading, on: true });
-  if (idx >= 0 && queue[idx + 1]) rows.push({ n: idx + 2, title: queue[idx + 1].title, time: null, on: false });
+  const rows: { n: number; title: string; time: T | null; loading?: boolean; on: boolean; label: string }[] = [];
+  // Previous player always stays in place (finishing, then "Played").
+  if (idx > 0) {
+    const prev = queue[idx - 1];
+    const d = prev?.duration || 0;
+    rows.push({ n: idx, title: prev?.title ?? "—", time: overlap ? times.tail : { t: d, d }, on: overlap, label: overlap ? "Finishing" : "Played" });
+  }
+  if (idx >= 0) rows.push({ n: idx + 1, title: queue[idx].title, time: times.live, loading, on: true, label: "Playing" });
+  if (idx >= 0 && queue[idx + 1]) rows.push({ n: idx + 2, title: queue[idx + 1].title, time: null, on: false, label: "Next up" });
 
   if (!rows.length) return <p className="text-xs text-muted-foreground">Play a song to see the players.</p>;
 
@@ -67,8 +72,8 @@ export function DeckPlayers() {
               : <Disc3 className={cn("h-4 w-4", r.on ? "animate-spin text-primary" : "text-muted-foreground")} />}
           </div>
           <p className="truncate text-xs text-foreground">{r.title}</p>
-          <p className={cn("mb-1 text-[10px]", r.on ? "text-primary" : "text-muted-foreground")}>{r.on ? "Playing" : "Next up"}</p>
-          {r.on && <Bar time={r.time} loading={r.loading} />}
+          <p className={cn("mb-1 text-[10px]", r.on ? "text-primary" : "text-muted-foreground")}>{r.label}</p>
+          {r.time && <Bar time={r.time} loading={r.loading} />}
         </div>
       ))}
     </div>
